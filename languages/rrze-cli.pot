@@ -1,0 +1,257 @@
+# Copyright (C) 2023 RRZE-Webteam
+# This file is distributed under the GNU General Public License v2.
+msgid ""
+msgstr ""
+"Project-Id-Version: RRZE CLI 1.0.1\n"
+"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/rrze-cli\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"POT-Creation-Date: 2023-01-30T09:47:38+00:00\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"X-Generator: WP-CLI 2.7.1\n"
+"X-Domain: rrze-cli\n"
+
+#. Plugin Name of the plugin
+msgid "RRZE CLI"
+msgstr ""
+
+#. Plugin URI of the plugin
+msgid "https://github.com/RRZE-Webteam/rrze-cli"
+msgstr ""
+
+#. Description of the plugin
+msgid "A set of WP-CLI commands to help manage a WordPress website."
+msgstr ""
+
+#. Author of the plugin
+msgid "RRZE-Webteam"
+msgstr ""
+
+#. Author URI of the plugin
+msgid "https://blogs.fau.de/webworking/"
+msgstr ""
+
+#: includes/Command.php:53
+msgid "The provided callback is invalid"
+msgstr ""
+
+#: includes/Command.php:91
+msgid "Posts Updated: %d/%d"
+msgstr ""
+
+#: includes/Command.php:100
+msgid "%d posts were updated"
+msgstr ""
+
+#: includes/Migration/Export.php:166
+msgid "The export is now complete"
+msgstr ""
+
+#: includes/Migration/Export.php:168
+msgid "Something went wrong while trying to export the database"
+msgstr ""
+
+#: includes/Migration/Export.php:171
+msgid "Unable to get the list of tables to be exported"
+msgstr ""
+
+#: includes/Migration/Export.php:217
+msgid "Impossible to create the file"
+msgstr ""
+
+#: includes/Migration/Export.php:357
+msgid "The headers and data length are not matching"
+msgstr ""
+
+#: includes/Migration/Export.php:380
+msgid "%d users have been exported"
+msgstr ""
+
+#: includes/Migration/Export.php:493
+msgid "Exporting site meta data..."
+msgstr ""
+
+#: includes/Migration/Export.php:496
+msgid "Exporting users..."
+msgstr ""
+
+#: includes/Migration/Export.php:499
+msgid "Exporting tables"
+msgstr ""
+
+#: includes/Migration/Export.php:536
+msgid "Zipping files...."
+msgstr ""
+
+#: includes/Migration/Export.php:555
+msgid "A zip file named %s has been created"
+msgstr ""
+
+#: includes/Migration/Import.php:79
+#: includes/Migration/Import.php:306
+#: includes/Migration/Posts.php:69
+msgid "Invalid input file"
+msgstr ""
+
+#: includes/Migration/Import.php:98
+msgid "Parsing %s..."
+msgstr ""
+
+#: includes/Migration/Import.php:193
+msgid "An error has occurred when inserting %s: %s."
+msgstr ""
+
+#: includes/Migration/Import.php:200
+msgid "%s exists, using his ID (%d)..."
+msgstr ""
+
+#: includes/Migration/Import.php:228
+msgid "A map file has been created: %s"
+msgstr ""
+
+#: includes/Migration/Import.php:234
+msgid "%d users have been imported and %d users already existed"
+msgstr ""
+
+#: includes/Migration/Import.php:240
+msgid "Can not read the file %s"
+msgstr ""
+
+#: includes/Migration/Import.php:310
+msgid "Please, provide a blog_id "
+msgstr ""
+
+#: includes/Migration/Import.php:324
+msgid "Database imported"
+msgstr ""
+
+#: includes/Migration/Import.php:328
+msgid "Running search-replace"
+msgstr ""
+
+#: includes/Migration/Import.php:347
+msgid "Search and Replace has been successfully executed"
+msgstr ""
+
+#: includes/Migration/Import.php:350
+msgid "Running Search and Replace for uploads paths"
+msgstr ""
+
+#: includes/Migration/Import.php:374
+msgid "Uploads paths have been successfully updated: %s -> %s"
+msgstr ""
+
+#: includes/Migration/Import.php:467
+msgid "The provided file does not appear to be a zip file"
+msgstr ""
+
+#: includes/Migration/Import.php:472
+msgid "Extracting zip package..."
+msgstr ""
+
+#: includes/Migration/Import.php:491
+msgid "There's something wrong with the zip package, unable to find required files"
+msgstr ""
+
+#: includes/Migration/Import.php:511
+msgid "Unable to create new site"
+msgstr ""
+
+#: includes/Migration/Import.php:529
+msgid "Importing tables..."
+msgstr ""
+
+#: includes/Migration/Import.php:550
+msgid "Moving files..."
+msgstr ""
+
+#: includes/Migration/Import.php:566
+msgid "Importing Users..."
+msgstr ""
+
+#: includes/Migration/Import.php:583
+msgid "Flushing rewrite rules..."
+msgstr ""
+
+#: includes/Migration/Import.php:594
+msgid "Removing temporary files...."
+msgstr ""
+
+#: includes/Migration/Import.php:599
+msgid "All done, your new site is available at %s. Remember to flush the cache (memcache, redis etc)."
+msgstr ""
+
+#: includes/Migration/Import.php:614
+msgid "Moving Plugins..."
+msgstr ""
+
+#: includes/Migration/Import.php:652
+msgid "Moving Uploads..."
+msgstr ""
+
+#: includes/Migration/Import.php:668
+msgid "Moving Themes..."
+msgstr ""
+
+#: includes/Migration/Import.php:750
+msgid "It was not possible to do a search and replace of the SQL file."
+msgstr ""
+
+#: includes/Migration/Import.php:754
+msgid "Could not overwrite SQL file."
+msgstr ""
+
+#: includes/Migration/Import.php:769
+msgid "Deleting transients..."
+msgstr ""
+
+#: includes/Migration/Posts.php:82
+msgid "An error has occurred when parsing the json file"
+msgstr ""
+
+#: includes/Migration/Posts.php:90
+msgid "Updating posts authors"
+msgstr ""
+
+#: includes/Migration/Posts.php:108
+msgid "Updated post_author for \"%s\" (ID #%d)"
+msgstr ""
+
+#: includes/Migration/Posts.php:114
+msgid "#%d New user ID equals to the old user ID"
+msgstr ""
+
+#: includes/Migration/Posts.php:121
+msgid "#%d New user ID not found or it is already been updated"
+msgstr ""
+
+#: includes/Migration/Posts.php:145
+msgid "Updated %s for \"%s\" (ID #%d)"
+msgstr ""
+
+#: includes/Migration/Posts.php:158
+msgid "%d records failed to update its post_author: %s"
+msgstr ""
+
+#: includes/Migration/Posts.php:166
+msgid "The following records have the new ID equal to the old ID: %s"
+msgstr ""
+
+#. translators: 1: Server PHP version number, 2: Required PHP version number.
+#: rrze-cli.php:56
+msgid "The server is running PHP version %1$s. The Plugin requires at least PHP version %2$s."
+msgstr ""
+
+#. translators: 1: Server WordPress version number, 2: Required WordPress version number.
+#: rrze-cli.php:63
+msgid "The server is running WordPress version %1$s. The Plugin requires at least WordPress version %2$s."
+msgstr ""
+
+#. translators: 1: The plugin name, 2: The error string.
+#: rrze-cli.php:82
+#: rrze-cli.php:129
+msgid "Plugins: %1$s: %2$s"
+msgstr ""
