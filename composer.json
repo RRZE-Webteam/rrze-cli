@@ -1,0 +1,15 @@
+{
+    "name": "rrze/rrze-cli",
+    "description": "A set of WP-CLI commands to help manage a WordPress website.",
+    "type": "wp-cli-package",
+    "license": "GPL",
+    "require": {
+        "php": "^8.0.0",
+        "alchemy/zippy": "1.0.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "RRZE\\CLI\\": "includes/"
+        }
+    }
+}
