@@ -57,7 +57,7 @@ In einigen Sonderfällen ist es möglich, `rrze-migration export` nicht alle ben
 $ wp rrze-migration export all website.zip --blog_id=1 --custom-tables=custom_table_1,custom_table_2
 ```
 
-Wenn man `--tables` übergeben, werden nur die übergebenen Tabellen exportiert. Wenn man es also verwendet, muss man sicher stellen, dass alle Tabellen übergebit, die man exportieren möchtet, einschließlich der Standardtabellen des WordPress.
+Wenn man `--tables` übergeben, werden nur die übergebenen Tabellen exportiert. Wenn man es also verwendet, muss man sicher stellen, dass alle Tabellen übergibt, die man exportieren möchtet, einschließlich der Standardtabellen des WordPress.
 
 ### Anmerkungen
 
