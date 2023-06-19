@@ -6,7 +6,6 @@ defined('ABSPATH') || exit;
 
 use RRZE\CLI\{Command, Utils};
 use WP_CLI;
-use Alchemy\Zippy\Zippy;
 
 /**
  * Exports an entire website into a zip package.
