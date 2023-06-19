@@ -3,7 +3,7 @@
 Plugin Name:      RRZE CLI
 Plugin URI:       https://github.com/RRZE-Webteam/rrze-cli
 Description:      A set of WP-CLI commands to help manage a WordPress website.
-Version:          1.0.0
+Version:          1.0.1
 Author:           RRZE-Webteam
 Author URI:       https://blogs.fau.de/webworking/
 License:          GNU General Public License v2
@@ -17,7 +17,7 @@ namespace RRZE\CLI;
 defined('ABSPATH') || exit;
 
 const RRZE_PHP_VERSION = '8.0';
-const RRZE_WP_VERSION  = '6.1';
+const RRZE_WP_VERSION  = '6.2';
 
 // Autoloader
 require_once 'vendor/autoload.php';
