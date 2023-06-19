@@ -6,7 +6,6 @@ defined('ABSPATH') || exit;
 
 use RRZE\CLI\{Command, Utils};
 use WP_CLI;
-use Alchemy\Zippy\Zippy;
 
 /**
  * Imports users and tables from a CSV file as well as an entire website from a ZIP file.
