@@ -22,6 +22,9 @@ defined('ABSPATH') || exit;
 // Autoloader
 require_once 'vendor/autoload.php';
 
+// Load the plugin's text domain for localization.
+add_action('init', fn() => load_plugin_textdomain('rrze-cli', false, dirname(plugin_basename(__FILE__)) . '/languages'));
+
 /**
  * Add an action hook for the 'plugins_loaded' hook.
  *
@@ -29,21 +32,6 @@ require_once 'vendor/autoload.php';
  * WordPress has fully loaded all active plugins and the theme's functions.php file.
  */
 add_action('plugins_loaded', __NAMESPACE__ . '\loaded');
-
-/**
- * Load the text domain for plugin localization.
- *
- * This method loads the translation files for the plugin.
- */
-function loadTextdomain()
-{
-    // Load the plugin's text domain for localization.
-    load_plugin_textdomain(
-        'rrze-cli', // The text domain used for translating plugin strings.
-        false, // Deprecated. Should be set to 'false'.
-        sprintf('%s/languages/', dirname(plugin_basename(__FILE__))) // The path to the translation files.
-    );
-}
 
 /**
  * Singleton pattern for initializing and accessing the main plugin instance.
@@ -90,7 +78,7 @@ function systemRequirements(): string
     if (!is_wp_version_compatible(plugin()->getRequiresWP())) {
         $error = sprintf(
             /* translators: 1: Server WordPress version number, 2: Required WordPress version number. */
-            __('The server is running WordPress version %1$s. The plugin requires at least WordPress version %2$s.', 'rrze-updater'),
+            __('The server is running WordPress version %1$s. The plugin requires at least WordPress version %2$s.', 'rrze-settings'),
             $wp_version,
             plugin()->getRequiresWP()
         );
@@ -98,7 +86,7 @@ function systemRequirements(): string
         // Check if the PHP version is compatible with the plugin's requirement.
         $error = sprintf(
             /* translators: 1: Server PHP version number, 2: Required PHP version number. */
-            __('The server is running PHP version %1$s. The plugin requires at least PHP version %2$s.', 'rrze-updater'),
+            __('The server is running PHP version %1$s. The plugin requires at least PHP version %2$s.', 'rrze-settings'),
             $phpVersion,
             plugin()->getRequiresPHP()
         );
@@ -116,9 +104,6 @@ function systemRequirements(): string
  */
 function loaded()
 {
-    // Load the plugin's text domain for localization.
-    loadTextdomain();
-
     // Trigger the 'loaded' method of the main plugin instance.
     plugin()->loaded();
 
@@ -139,7 +124,7 @@ function loaded()
                     printf(
                         '<div class="notice notice-error"><p>' .
                             /* translators: 1: The plugin name, 2: The error string. */
-                            esc_html__('Plugins: %1$s: %2$s', 'rrze-updater') .
+                            esc_html__('Plugins: %1$s: %2$s', 'rrze-settings') .
                             '</p></div>',
                         $pluginName,
                         $error
@@ -152,6 +137,6 @@ function loaded()
         return;
     }
 
-    // If there are no errors, create an instance of the 'Main' class.
-    new Main;
+    // If there are no errors, create an instance of the 'Main' class and trigger its 'loaded' method.
+    (new Main)->loaded();
 }
