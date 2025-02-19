@@ -43,6 +43,7 @@ class Plugin
     public function __construct(string $pluginFile)
     {
         $this->pluginFile = $pluginFile;
+        require_once ABSPATH . 'wp-admin/includes/plugin.php';
     }
 
     /**
@@ -148,7 +149,7 @@ class Plugin
      */
     public function setData(): object
     {
-        $this->data = get_plugin_data($this->pluginFile, false);
+        $this->data = get_plugin_data($this->pluginFile, false, false);
         return $this;
     }
 
@@ -195,5 +196,19 @@ class Plugin
     public function getRequiresPHP(): string
     {
         return $this->data['RequiresPHP'];
+    }
+
+    /**
+     * __call method
+     * Method overloading.
+     */
+    public function __call(string $name, array $arguments)
+    {
+        if (!method_exists($this, $name)) {
+            $message = sprintf('Call to undefined method %1$s::%2$s', __CLASS__, $name);
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                throw new \Exception($message);
+            }
+        }
     }
 }
