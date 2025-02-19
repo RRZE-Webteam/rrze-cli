@@ -10,6 +10,8 @@ class ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f
         'a4a119a56e50fbb293281d9a48007e0e' => __DIR__ . '/..' . '/symfony/polyfill-php80/bootstrap.php',
         '0e6d7bf4a5811bfa5cf40c5ccd6fae6a' => __DIR__ . '/..' . '/symfony/polyfill-mbstring/bootstrap.php',
         '320cde22f66dd4f5d3fd621d3e88b98f' => __DIR__ . '/..' . '/symfony/polyfill-ctype/bootstrap.php',
+        '3937806105cc8e221b8fa8db5b70d2f2' => __DIR__ . '/..' . '/wp-cli/mustangostang-spyc/includes/functions.php',
+        'be01b9b16925dcb22165c40b46681ac6' => __DIR__ . '/..' . '/wp-cli/php-cli-tools/lib/cli/cli.php',
     );
 
     public static $prefixLengthsPsr4 = array (
@@ -19,11 +21,16 @@ class ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f
             'Symfony\\Polyfill\\Mbstring\\' => 26,
             'Symfony\\Polyfill\\Ctype\\' => 23,
             'Symfony\\Component\\Process\\' => 26,
+            'Symfony\\Component\\Finder\\' => 25,
             'Symfony\\Component\\Filesystem\\' => 29,
         ),
         'R' => 
         array (
             'RRZE\\CLI\\' => 9,
+        ),
+        'M' => 
+        array (
+            'Mustangostang\\' => 14,
         ),
         'D' => 
         array (
@@ -53,6 +60,10 @@ class ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f
         array (
             0 => __DIR__ . '/..' . '/symfony/process',
         ),
+        'Symfony\\Component\\Finder\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/symfony/finder',
+        ),
         'Symfony\\Component\\Filesystem\\' => 
         array (
             0 => __DIR__ . '/..' . '/symfony/filesystem',
@@ -61,9 +72,13 @@ class ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f
         array (
             0 => __DIR__ . '/../..' . '/includes',
         ),
+        'Mustangostang\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/wp-cli/mustangostang-spyc/src',
+        ),
         'Doctrine\\Deprecations\\' => 
         array (
-            0 => __DIR__ . '/..' . '/doctrine/deprecations/lib/Doctrine/Deprecations',
+            0 => __DIR__ . '/..' . '/doctrine/deprecations/src',
         ),
         'Doctrine\\Common\\Collections\\' => 
         array (
@@ -75,6 +90,30 @@ class ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f
         ),
     );
 
+    public static $prefixesPsr0 = array (
+        'c' => 
+        array (
+            'cli' => 
+            array (
+                0 => __DIR__ . '/..' . '/wp-cli/php-cli-tools/lib',
+            ),
+        ),
+        'W' => 
+        array (
+            'WP_CLI\\' => 
+            array (
+                0 => __DIR__ . '/..' . '/wp-cli/wp-cli/php',
+            ),
+        ),
+        'M' => 
+        array (
+            'Mustache' => 
+            array (
+                0 => __DIR__ . '/..' . '/mustache/mustache/src',
+            ),
+        ),
+    );
+
     public static $classMap = array (
         'Attribute' => __DIR__ . '/..' . '/symfony/polyfill-php80/Resources/stubs/Attribute.php',
         'Composer\\InstalledVersions' => __DIR__ . '/..' . '/composer/InstalledVersions.php',
@@ -82,6 +121,8 @@ class ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f
         'Stringable' => __DIR__ . '/..' . '/symfony/polyfill-php80/Resources/stubs/Stringable.php',
         'UnhandledMatchError' => __DIR__ . '/..' . '/symfony/polyfill-php80/Resources/stubs/UnhandledMatchError.php',
         'ValueError' => __DIR__ . '/..' . '/symfony/polyfill-php80/Resources/stubs/ValueError.php',
+        'WP_CLI' => __DIR__ . '/..' . '/wp-cli/wp-cli/php/class-wp-cli.php',
+        'WP_CLI_Command' => __DIR__ . '/..' . '/wp-cli/wp-cli/php/class-wp-cli-command.php',
     );
 
     public static function getInitializer(ClassLoader $loader)
@@ -89,6 +130,7 @@ class ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f
         return \Closure::bind(function () use ($loader) {
             $loader->prefixLengthsPsr4 = ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f::$prefixLengthsPsr4;
             $loader->prefixDirsPsr4 = ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f::$prefixDirsPsr4;
+            $loader->prefixesPsr0 = ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f::$prefixesPsr0;
             $loader->classMap = ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f::$classMap;
 
         }, null, ClassLoader::class);
