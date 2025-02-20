@@ -73,13 +73,13 @@ class Import extends Command
 
         $assoc_args = $this->assoc_args;
 
-        $filename = ABSPATH . '/' . $this->args[0];
+        $filename = ABSPATH . $this->args[0];
 
         if (!Utils::is_zip_file($filename)) {
             WP_CLI::error(__('The provided file does not appear to be a zip file', 'rrze-cli'));
         }
 
-        $temp_dir = ABSPATH . '/' . 'rrze-migration-' . time() . '/';
+        $temp_dir = ABSPATH . 'rrze-migration-' . time() . '/';
 
         WP_CLI::log(__('Extracting zip package...', 'rrze-cli'));
 
