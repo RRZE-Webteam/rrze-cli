@@ -221,8 +221,7 @@ class Export extends Command
             if (empty($this->assoc_args['custom-tables'])) {
                 $assoc_args['all-tables-with-prefix'] = 1;
             }
-            error_log(print_r($assoc_args, true));
-            error_log($url);
+
             $tables = Utils::runcommand('db tables', [], $assoc_args, ['url' => $url]);
 
             if (0 === $tables->return_code) {
