@@ -5,7 +5,8 @@ namespace RRZE\CLI;
 defined('ABSPATH') || exit;
 
 use WP_CLI;
-use Alchemy\Zippy\Zippy;
+use PhpZip\ZipFile;
+use PhpZip\Exception\ZipException;
 
 class Utils
 {
@@ -58,10 +59,12 @@ class Utils
     {
         $limit = 0;
         while (file_exists($dirPath) && $limit++ < 10) {
-            foreach (new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($dirPath, \FilesystemIterator::SKIP_DOTS),
-                \RecursiveIteratorIterator::CHILD_FIRST
-            ) as $path) {
+            foreach (
+                new \RecursiveIteratorIterator(
+                    new \RecursiveDirectoryIterator($dirPath, \FilesystemIterator::SKIP_DOTS),
+                    \RecursiveIteratorIterator::CHILD_FIRST
+                ) as $path
+            ) {
                 $path->isFile() ? @unlink($path->getPathname()) : @rmdir($path->getPathname());
             }
 
@@ -83,10 +86,12 @@ class Utils
             mkdir($dest);
         }
 
-        foreach ($iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($source, \RecursiveDirectoryIterator::SKIP_DOTS),
-            \RecursiveIteratorIterator::SELF_FIRST
-        ) as $item) {
+        foreach (
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($source, \RecursiveDirectoryIterator::SKIP_DOTS),
+                \RecursiveIteratorIterator::SELF_FIRST
+            ) as $item
+        ) {
             if ($item->isDir()) {
                 $dir = $dest . DIRECTORY_SEPARATOR . $iterator->getSubPathName();
                 if (!file_exists($dir)) {
@@ -259,18 +264,26 @@ class Utils
     /**
      * Extracts a zip file to the $dest_dir.
      *
-     * @uses Zippy
-     *
      * @param string $filename
      * @param string $dest_dir
      */
     public static function extract($filename, $dest_dir)
     {
-        $zippy = Zippy::load();
+        if (!file_exists($dest_dir)) {
+            mkdir($dest_dir);
+        }
 
-        $site_package = $zippy->open($filename);
-        mkdir($dest_dir);
-        $site_package->extract($dest_dir);
+        $zipFile = new \PhpZip\ZipFile();
+        try {
+            $zipFile
+                ->openFile($filename) // open archive from file
+                ->extractTo($dest_dir) // extract files to the specified directory    
+                ->close(); // close archive  
+        } catch (ZipException $e) {
+            // handle exception
+        } finally {
+            $zipFile->close();
+        }
     }
 
     /**
@@ -283,7 +296,20 @@ class Utils
      */
     public static function zip($zip_file, $files_to_zip)
     {
-        return Zippy::load()->create($zip_file, $files_to_zip, true);
+        // create new archive
+        $zipFile = new ZipFile();
+        try {
+            foreach ($files_to_zip as $key => $file) {
+                $zipFile->addFile($file, $key); // add an entry from the file
+            }
+            $zipFile
+                ->saveAsFile($zip_file) // save the archive to a file
+                ->close(); // close archive
+        } catch (ZipException $e) {
+            WP_CLI::warning($e->getMessage());
+        } finally {
+            $zipFile->close();
+        }
     }
 
     /**
@@ -326,51 +352,6 @@ class Utils
         return in_array(
             'woocommerce/woocommerce.php',
             apply_filters('active_plugins', get_option('active_plugins'))
-        );
-    }
-
-    /**
-     * Log errors by writing to the debug.log file.
-     */
-    public static function debug($input, string $level = 'i')
-    {
-        if (!defined('WP_DEBUG') || !WP_DEBUG) {
-            return;
-        }
-        if (in_array(strtolower((string) WP_DEBUG_LOG), ['true', '1'], true)) {
-            $logPath = WP_CONTENT_DIR . '/debug.log';
-        } elseif (is_string(WP_DEBUG_LOG)) {
-            $logPath = WP_DEBUG_LOG;
-        } else {
-            return;
-        }
-        if (is_array($input) || is_object($input)) {
-            $input = print_r($input, true);
-        }
-        switch (strtolower($level)) {
-            case 'e':
-            case 'error':
-                $level = 'Error';
-                break;
-            case 'i':
-            case 'info':
-                $level = 'Info';
-                break;
-            case 'd':
-            case 'debug':
-                $level = 'Debug';
-                break;
-            default:
-                $level = 'Info';
-        }
-        error_log(
-            date("[d-M-Y H:i:s \U\T\C]")
-                . " WP $level: "
-                . basename(__FILE__) . ' '
-                . $input
-                . PHP_EOL,
-            3,
-            $logPath
         );
     }
 }
