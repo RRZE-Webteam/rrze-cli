@@ -84,7 +84,7 @@ class Export extends Command
             $assoc_args
         );
 
-        $zip_file = ABSPATH . '/' . $this->args[0];
+        $zip_file = ABSPATH . $this->args[0];
 
         $include_plugins = isset($this->assoc_args['plugins']) ? true : false;
         $include_themes  = isset($this->assoc_args['themes']) ? true : false;
@@ -114,17 +114,15 @@ class Export extends Command
         WP_CLI::log(__('Exporting tables...', 'rrze-cli'));
         $this->tables(array($tables_file), $tables_assoc_args, $verbose);
 
-        $zip = null;
-
         // Removing previous $zip_file, if any.
         if (file_exists($zip_file)) {
             unlink($zip_file);
         }
 
         $files_to_zip = [
-            $users_file     => ABSPATH . '/' . $users_file,
-            $tables_file    => ABSPATH . '/' . $tables_file,
-            $meta_data_file => ABSPATH . '/' . $meta_data_file,
+            $users_file     => ABSPATH . $users_file,
+            $tables_file    => ABSPATH . $tables_file,
+            $meta_data_file => ABSPATH . $meta_data_file,
         ];
 
         if ($include_plugins) {
