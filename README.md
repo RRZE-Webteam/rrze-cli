@@ -1,64 +1,60 @@
 # RRZE-CLI
 
-WP-CLI Erweiterung für die CMS-Verwaltung des RRZE.
+WP-CLI extension for RRZE's CMS management.
 
-## Anforderungen
+## Requirements
 
--   PHP >= 8.0
--   WP-CLI >= 2.7.1
+-   PHP >= 8.2
+-   WP-CLI >= 2.11.0
 
 ## Migration
 
-Diese WP-CLI-Erweiterung macht den Prozess der Migration von Websites von einzelnen Wordpress-Instanzen zu einer Multisite-Instanz (oder umgekehrt) viel einfacher. Es exportiert alles in ein ZIP-Paket, das verwendet werden kann, um es automatisch in die gewünschte Multisite-Installation zu importieren.
+This WP-CLI extension simplifies the process of migrating websites from standalone WordPress instances to a Multisite installation (or vice versa). It exports everything into a ZIP package, which can then be automatically imported into the desired Multisite installation.
 
-### Verwendung
+### Usage
 
-Der Befehl `rrze-migration export` exportiert eine ganze Website in ein Zip-Paket.
-
-```
-$ wp rrze-migration export all website.zip --plugins --themes --uploads
-```
-
-Der obige Befehl exportiert Benutzer, Tabellen, Plugins-Ordner, Themes-Ordner und den Uploads-Ordner in eine ZIP-Datei, die man auf der Multisite-Instanz migrieren kann, um sie mit dem Befehl `import all` zu importieren. Die optionalen Flags `--plugins --themes --uploads` fügen den Plugins-Ordner, den Themes-Ordner bzw. den Uploads-Ordner zur ZIP-Datei hinzu.
-
-Man kann auch Websites aus einer Multisite-Instanz exportieren, man muss dazu den Parameter `--blog_id` übergeben. Bspw:
+The `rrze-migration export` command exports an entire website into a ZIP package.
 
 ```
-$ wp rrze-migration export all website.zip --blog_id=2
+$ wp rrze-migration export all
 ```
 
-Der Befehl `rrze-migration import` kann verwendet werden, um eine Website aus einem ZIP-Paket zu importieren.
+You can also export websites from a Multisite instance by passing the `--url` parameter. For example:
+
+```
+$ wp rrze-migration export all --url=website-url
+```
+
+The `rrze-migration import` command can be used to import a website from a ZIP package.
 
 ```
 $ wp rrze-migration import all website.zip
 ```
 
-Beim Importieren in eine Multisite-Instanz wird eine neue Website innerhalb der Multisite-Instanz erstellt, basierend auf der Website, die man gerade exportiert hat. Beim Importieren in eine einzelne Installation wird die aktuelle Website mit der exportierten Website überschrieben.
+When importing into a Multisite instance, a new website within the Multisite network is created based on the exported website. When importing into a standalone installation, the current website is overwritten with the exported website.
 
-Der Befehl `rrze-migration import all` kümmert sich um alles, was getan werden muss, wenn eine Website in der Multisite-Instanz migrieren wird (Ersetzen von Tabellenpräfixen, Aktualisieren von `post_author`-IDs usw.).
+The `rrze-migration import all` command handles everything required for migrating a website within a Multisite instance.
 
-Wenn man eine neue URL für die zu importierende Website einrichten muss, kann man diese an den Befehl `rrze-migration import all` übergeben.
-
-```
-$ wp rrze-migration import all website.zip --new_url=new-website-domain
-```
-
-Der Befehl `rrze-migration import` unterstützt auch den Parameter `--mysql-single-transaction`, der den SQL-Export in eine einzige Transaktion umschließt, um alle Änderungen aus dem Import auf einmal festzuschreiben und zu verhindern, dass der Schreibvorgang den Datenbankserver überlastet.
-
-Man kann auch `--blog_id` an den Befehl `import all` übergeben, in diesem Fall überschreibt der Import eine vorhandene Website.
+If you need to set up a new URL for the imported website, you can pass it to the `rrze-migration import all` command.
 
 ```
-$ wp rrze-migration import all website.zip --new_url=new-website-domain --blog_id=2
+$ wp rrze-migration import all website.zip --new_url=new-website-url
 ```
 
-In einigen Sonderfällen ist es möglich, `rrze-migration export` nicht alle benutzerdefinierten Tabellen erkennen kann, während eine Website in eine Multisite-Instanz exportiert wird. Wenn man also nicht standardmäßige Tabellen migrieren muss, kann man das Parameter `--tables` oder `--custom-tables` verwenden. Bspw:
+In some special cases, `rrze-migration export` may not detect all custom tables when exporting a website to a Multisite instance. If you need to migrate non-standard tables, you can use the `--tables` or `--custom-tables` parameter. For example:
 
 ```
-$ wp rrze-migration export all website.zip --blog_id=1 --custom-tables=custom_table_1,custom_table_2
+$ wp rrze-migration export all --url=website-url --custom-tables=custom_table_1,custom_table_2
 ```
 
-Wenn man `--tables` übergeben, werden nur die übergebenen Tabellen exportiert. Wenn man es also verwendet, muss man sicher stellen, dass alle Tabellen übergibt, die man exportieren möchtet, einschließlich der Standardtabellen des WordPress.
+If you pass `--tables`, only the specified tables will be exported. Therefore, when using this option, ensure that all necessary tables, including WordPress default tables, are included in the export.
 
-### Anmerkungen
+The `rrze-migration import` command also supports the `--mysql-single-transaction` parameter, which wraps the SQL export into a single transaction to commit all import changes at once, preventing database server overload.
 
-Wenn die Themes und die Plugins auf WordPress-Art erstellt wurden, sollte man nach der Migration keine größeren Probleme haben. Man muss daran denken, dass bei einigen Themes Inkompatibilitätsprobleme auftreten können (bspw. fest codierte Links wie '/kontakt' usw.). Abhängig von der Codebasis der Website, die man migriert, muss man möglicherweise einige Anpassungen an dem Code vornehmen.
+```
+$ wp rrze-migration import all website.zip --new_url=new-website-url
+```
+
+### Notes
+
+If themes and plugins are developed according to WordPress standards, migration should proceed without major issues. However, depending on the codebase of the website being migrated, you may need to make some adjustments to the code.
