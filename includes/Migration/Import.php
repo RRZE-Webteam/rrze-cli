@@ -311,7 +311,7 @@ class Import extends Command
                      * wp_insert_users accepts only the default user meta keys.
                      */
                     $default_user_data = [];
-                    foreach (Export::getCSVHeaders() as $key) {
+                    foreach (Export::getUserCSVHeaders() as $key) {
                         if (isset($user_data[$key])) {
                             $default_user_data[$key] = $user_data[$key];
                         }
