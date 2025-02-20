@@ -9,11 +9,6 @@ use WP_CLI;
 
 /**
  * Exports an entire website into a zip package.
- *
- * ## EXAMPLES
- *
- *     # Exports users, tables, plugins folder, themes folder and the uploads folder to a ZIP file.
- *     $ wp rrze-migration export all website.zip --plugins --themes --uploads
  * 
  * @package RRZE\CLI
  */
@@ -23,6 +18,9 @@ class Export extends Command
      * Exports a website to a ZIP file.
      *
      * ## OPTIONS
+     * 
+     * [<outputfile>]
+     * : The name of the exported ZIP file.
      * 
      * [--tables=<table_list>]
      * : Comma-separated list of tables to be exported.
@@ -44,8 +42,8 @@ class Export extends Command
      * 
      * ## EXAMPLES
      * 
-     *     # Exports a website to website.zip file.
-     *     $ wp rrze-migration export all [--url=www.site.de.localhost]
+     * Exports a website to website.zip file.
+     * wp rrze-migration export all [--url=website-url]
      *
      * @param array $args
      * @param array $assoc_args
@@ -60,6 +58,8 @@ class Export extends Command
             $verbose = true;
         }
 
+        $blogId = get_current_blog_id();
+
         $site_data = [
             'url'             => esc_url(home_url()),
             'name'            => sanitize_text_field(get_bloginfo('name')),
@@ -69,12 +69,8 @@ class Export extends Command
             'plugins'         => get_plugins(),
             'blog_plugins'    => get_option('active_plugins'),
             'network_plugins' => is_multisite() ? get_site_option('active_sitewide_plugins') : [],
-            'blog_id'         => 1
+            'blog_id'         => $blogId
         ];
-
-        if (isset($assoc_args['blog_id'])) {
-            $site_data['blog_id'] = get_current_blog_id();
-        }
 
         $this->process_args(
             [
@@ -82,13 +78,12 @@ class Export extends Command
             ],
             $args,
             [
-                'blog_id'       => false,
                 'tables'        => '',
                 'custom-tables' => '',
             ],
             $assoc_args
         );
-        error_log(print_r($this->args, true));
+
         $zip_file = ABSPATH . '/' . $this->args[0];
 
         $include_plugins = isset($this->assoc_args['plugins']) ? true : false;
@@ -101,14 +96,10 @@ class Export extends Command
             'custom-tables' => $this->assoc_args['custom-tables'],
         ];
 
-        if ($this->assoc_args['blog_id']) {
-            $users_assoc_args['blog_id']  = (int) $this->assoc_args['blog_id'];
-            $tables_assoc_args['blog_id'] = (int) $this->assoc_args['blog_id'];
-        }
+        $users_assoc_args['blog_id']  = $blogId;
+        $tables_assoc_args['blog_id'] = $blogId;
 
-        /*
-         * Adds a random prefix to temporary file names to ensure uniqueness and also for security reasons.
-         */
+        // Adds a random prefix to temporary file names to ensure uniqueness and also for security reasons.
         $rand = bin2hex(random_bytes(8));
         $users_file = 'rrze-migration-' . $rand . '-' . sanitize_title($site_data['name']) . '.csv';
         $tables_file = 'rrze-migration-' . $rand . '-' . sanitize_title($site_data['name']) . '.sql';
@@ -125,9 +116,7 @@ class Export extends Command
 
         $zip = null;
 
-        /*
-         * Removing previous $zip_file, if any.
-         */
+        // Removing previous $zip_file, if any.
         if (file_exists($zip_file)) {
             unlink($zip_file);
         }
@@ -183,7 +172,7 @@ class Export extends Command
      * 
      * ## OPTIONS
      *
-     * <outputfile>
+     * [<outputfile>]
      * : The name of the exported SQL file.
      * 
      * [--tables=<table_list>]
@@ -194,8 +183,8 @@ class Export extends Command
      * 
      * ## EXAMPLES
      * 
-     *     # Exports all standard tables of a website to output.sql file.
-     *     $ wp rrze-migration export tables output.sql
+     *     # Exports all standard tables of a website to a sql file.
+     *     $ wp rrze-migration export tables [--url=website-url]
      *
      * @param array $args
      * @param array $assoc_args
@@ -207,7 +196,7 @@ class Export extends Command
 
         $this->process_args(
             [
-                0 => '', // output file name
+                0 => 'rrze-migration-' . sanitize_text_field(get_bloginfo('name')) . '.sql',
             ],
             $args,
             [
@@ -218,6 +207,9 @@ class Export extends Command
         );
 
         $filename = $this->args[0];
+        if (empty($filename)) {
+            WP_CLI::error(__('Please provide a filename for the exported SQL file', 'rrze-cli'));
+        }
 
         $url = get_home_url();
 
@@ -286,11 +278,8 @@ class Export extends Command
      *
      * ## OPTIONS
      *
-     * <outputfile>
+     * [<outputfile>]
      * : The name of the exported CSV file.
-     * 
-     * [--blog_id=<blog_id>]
-     * : The ID of the website to export.
      * 
      * [--woocomerce]
      * : Include all wc_customer_user (if WooCommerce is installed).
@@ -298,7 +287,7 @@ class Export extends Command
      * ## EXAMPLES
      * 
      *     # Exports all website users and wc_customer_user with ID=2 to a CSV file.
-     *     $ wp rrze-migration export users output.csv --blog_id=2 --woocomerce
+     *     $ wp rrze-migration export users --woocomerce [--url=website-url]
      *
      * @param array $args
      * @param array $assoc_args
@@ -306,13 +295,15 @@ class Export extends Command
      */
     public function users($args = [], $assoc_args = [], $verbose = true)
     {
+        $blogId = get_current_blog_id();
+
         $this->process_args(
             [
-                0 => 'users.csv',
+                0 => 'rrze-migration-' . sanitize_text_field(get_bloginfo('name')) . '.csv',
             ],
             $args,
             [
-                'blog_id' => '',
+                'woocomerce' => false,
             ],
             $assoc_args
         );
@@ -332,9 +323,7 @@ class Export extends Command
             'fields' => 'all',
         ];
 
-        if (!empty($this->assoc_args['blog_id'])) {
-            $users_args['blog_id'] = (int) $this->assoc_args['blog_id'];
-        }
+        $users_args['blog_id'] = $blogId;
 
         $excluded_meta_keys = [
             'session_tokens' => true,
@@ -387,12 +376,11 @@ class Export extends Command
                 $user->get('yim'),
                 $user->get('jabber'),
                 $user->get('description'),
+                $user->get('_application_passwords'),
             ];
 
-            /*
-             * Keeping arrays consistent, not all users have the same meta, so it's possible to have some users who
-             * don't even have a given meta key. It must be ensured that these users have an empty column for these fields.
-             */
+            // Keeping arrays consistent, not all users have the same meta, so it's possible to have some users who
+            // don't even have a given meta key. It must be ensured that these users have an empty column for these fields.
             if (count($headers) - count($user_data) > 0) {
                 $user_temp_data_arr = array_fill(0, count($headers) - count($user_data), '');
                 $user_data = array_merge($user_data, $user_temp_data_arr);
@@ -403,16 +391,12 @@ class Export extends Command
             $user_meta = get_user_meta($user->data->ID);
             $meta_keys = array_keys($user_meta);
 
-            /*
-             * Removing all unwanted meta keys.
-             */
+            // Removing all unwanted meta keys.
             foreach ($meta_keys as $user_meta_key) {
                 if (!isset($excluded_meta_keys[$user_meta_key])) {
                     $can_add = true;
 
-                    /*
-                     * Checking for unwanted meta keys.
-                     */
+                    // Checking for unwanted meta keys.
                     foreach ($excluded_meta_keys_regex as $regex) {
                         if (preg_match($regex, $user_meta_key)) {
                             $can_add = false;
@@ -456,7 +440,7 @@ class Export extends Command
              * @param array
              * @param \WP_User $user The user object.
              */
-            $custom_user_data = apply_filters('rrze_migration/export/user/data', [], $user);
+            $custom_user_data = apply_filters('rrze_migration_export_user_data', [], $user);
 
             if (!empty($custom_user_data)) {
                 $user_data = array_merge($user_data, $custom_user_data);
@@ -470,9 +454,7 @@ class Export extends Command
             $count++;
         }
 
-        /*
-         * Once all the meta keys of the users are obtained, everything can be saved in a csv file.
-         */
+        // Once all the meta keys of the users are obtained, everything can be saved in a csv file.
         fputcsv($file_handler, $headers, $delimiter);
 
         foreach ($user_data_arr as $user_data) {
@@ -498,7 +480,7 @@ class Export extends Command
      */
     public static function getUserCSVHeaders()
     {
-        return [
+        $headers = [
             // General Info.
             'ID',
             'user_login',
@@ -522,6 +504,15 @@ class Export extends Command
             'yim',
             'jabber',
             'description',
+            '_application_passwords',
         ];
+
+        $custom_headers = apply_filters('rrze_migration_export_user_headers', []);
+
+        if (!empty($custom_headers)) {
+            $headers = array_merge($headers, $custom_headers);
+        }
+
+        return $headers;
     }
 }
