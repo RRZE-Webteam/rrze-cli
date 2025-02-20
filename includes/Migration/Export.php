@@ -29,13 +29,13 @@ class Export extends Command
      * : Comma-separated list of non-standard tables to be exported.
      * 
      * [--plugins]
-     * : Includes the whole plugins directory.
+     * : Includes the whole plugins directory. Don't use this option if you don't know what you're doing.
      * 
      * [--themes]
-     * : Includes website theme/child directory.
+     * : Includes website theme/child directory. Don't use this option if you don't know what you're doing.
      * 
      * [--uploads]
-     * : Includes website uploads directory.
+     * : Includes website uploads directory. Don't use this option if you don't know what you're doing.
      * 
      * [--verbose]
      * : Display additional details during command execution.
@@ -128,10 +128,12 @@ class Export extends Command
         ];
 
         if ($include_plugins) {
+            WP_CLI::log(__('Including plugins directory...', 'rrze-cli'));
             $files_to_zip['wp-content/plugins'] = WP_PLUGIN_DIR;
         }
 
         if ($include_themes) {
+            WP_CLI::log(__('Including themes directory...', 'rrze-cli'));
             $theme_dir = get_template_directory();
             $files_to_zip['wp-content/themes/' . basename($theme_dir)] = $theme_dir;
             if (get_template_directory() !== get_stylesheet_directory()) {
@@ -141,6 +143,7 @@ class Export extends Command
         }
 
         if ($include_uploads) {
+            WP_CLI::log(__('Including website uploads directory...', 'rrze-cli'));
             $upload_dir = wp_upload_dir();
             $files_to_zip['wp-content/uploads'] = $upload_dir['basedir'];
         }
@@ -213,16 +216,15 @@ class Export extends Command
 
         $url = get_home_url();
 
-        /*
-         * If the tables to be exported have not been provided, obtain them automatically.
-         */
+        // If the tables to be exported have not been provided, obtain them automatically.
         if (empty($this->assoc_args['tables'])) {
             $assoc_args = ['format' => 'csv'];
 
             if (empty($this->assoc_args['custom-tables'])) {
                 $assoc_args['all-tables-with-prefix'] = 1;
             }
-
+            error_log(print_r($assoc_args, true));
+            error_log($url);
             $tables = Utils::runcommand('db tables', [], $assoc_args, ['url' => $url]);
 
             if (0 === $tables->return_code) {
@@ -331,9 +333,7 @@ class Export extends Command
             'source_domain'  => true,
         ];
 
-        /*
-         * Do not include meta keys that depend on the db prefix.
-         */
+        // Do not include meta keys that depend on the db prefix.
         $excluded_meta_keys_regex = [
             '/capabilities$/',
             '/user_level$/',
@@ -346,9 +346,7 @@ class Export extends Command
         $users = get_users($users_args);
         $user_data_arr = [];
 
-        /*
-         * This first foreach will find all users meta stored in the usersmeta table.
-         */
+        // This first foreach will find all users meta stored in the usersmeta table.
         foreach ($users as $user) {
             $role = isset($user->roles[0]) ? $user->roles[0] : '';
 
@@ -507,6 +505,11 @@ class Export extends Command
             '_application_passwords',
         ];
 
+        /**
+         * Filters the default set of user headers to be exported/imported.
+         *
+         * @param array
+         */
         $custom_headers = apply_filters('rrze_migration_export_user_headers', []);
 
         if (!empty($custom_headers)) {
