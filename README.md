@@ -52,7 +52,7 @@ $ wp rrze-migration import all website.zip --new_url=new-website-url
 The `rrze-migration import` command also supports the `--mysql-single-transaction` parameter, which wraps the SQL export into a single transaction to commit all import changes at once, preventing database server overload.
 
 ```
-$ wp rrze-migration import all website.zip --new_url=new-website-url
+$ wp rrze-migration import all website.zip --new_url=new-website-url --mysql-single-transaction
 ```
 
 ### Notes
