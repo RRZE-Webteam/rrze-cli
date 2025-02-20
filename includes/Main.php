@@ -19,10 +19,6 @@ class Main
             return;
         }
 
-        if (!is_multisite()) {
-            WP_CLI::error(__('This command must be run on a multisite installation.', 'rrze-cli'));
-        }
-
         // Output the WP_CLI version
         $wpcliVersion = WP_CLI::runcommand('cli version', ['return' => true]);
         WP_CLI::log(trim($wpcliVersion));
