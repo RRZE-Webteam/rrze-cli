@@ -7,9 +7,6 @@ namespace Composer\Autoload;
 class ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f
 {
     public static $files = array (
-        'a4a119a56e50fbb293281d9a48007e0e' => __DIR__ . '/..' . '/symfony/polyfill-php80/bootstrap.php',
-        '0e6d7bf4a5811bfa5cf40c5ccd6fae6a' => __DIR__ . '/..' . '/symfony/polyfill-mbstring/bootstrap.php',
-        '320cde22f66dd4f5d3fd621d3e88b98f' => __DIR__ . '/..' . '/symfony/polyfill-ctype/bootstrap.php',
         '3937806105cc8e221b8fa8db5b70d2f2' => __DIR__ . '/..' . '/wp-cli/mustangostang-spyc/includes/functions.php',
         'be01b9b16925dcb22165c40b46681ac6' => __DIR__ . '/..' . '/wp-cli/php-cli-tools/lib/cli/cli.php',
     );
@@ -17,76 +14,43 @@ class ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f
     public static $prefixLengthsPsr4 = array (
         'S' => 
         array (
-            'Symfony\\Polyfill\\Php80\\' => 23,
-            'Symfony\\Polyfill\\Mbstring\\' => 26,
-            'Symfony\\Polyfill\\Ctype\\' => 23,
-            'Symfony\\Component\\Process\\' => 26,
             'Symfony\\Component\\Finder\\' => 25,
-            'Symfony\\Component\\Filesystem\\' => 29,
         ),
         'R' => 
         array (
             'RRZE\\CLI\\' => 9,
         ),
+        'P' => 
+        array (
+            'Psr\\Http\\Message\\' => 17,
+            'PhpZip\\' => 7,
+        ),
         'M' => 
         array (
             'Mustangostang\\' => 14,
         ),
-        'D' => 
-        array (
-            'Doctrine\\Deprecations\\' => 22,
-            'Doctrine\\Common\\Collections\\' => 28,
-        ),
-        'A' => 
-        array (
-            'Alchemy\\Zippy\\' => 14,
-        ),
     );
 
     public static $prefixDirsPsr4 = array (
-        'Symfony\\Polyfill\\Php80\\' => 
-        array (
-            0 => __DIR__ . '/..' . '/symfony/polyfill-php80',
-        ),
-        'Symfony\\Polyfill\\Mbstring\\' => 
-        array (
-            0 => __DIR__ . '/..' . '/symfony/polyfill-mbstring',
-        ),
-        'Symfony\\Polyfill\\Ctype\\' => 
-        array (
-            0 => __DIR__ . '/..' . '/symfony/polyfill-ctype',
-        ),
-        'Symfony\\Component\\Process\\' => 
-        array (
-            0 => __DIR__ . '/..' . '/symfony/process',
-        ),
         'Symfony\\Component\\Finder\\' => 
         array (
             0 => __DIR__ . '/..' . '/symfony/finder',
-        ),
-        'Symfony\\Component\\Filesystem\\' => 
-        array (
-            0 => __DIR__ . '/..' . '/symfony/filesystem',
         ),
         'RRZE\\CLI\\' => 
         array (
             0 => __DIR__ . '/../..' . '/includes',
         ),
+        'Psr\\Http\\Message\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/psr/http-message/src',
+        ),
+        'PhpZip\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/nelexa/zip/src',
+        ),
         'Mustangostang\\' => 
         array (
             0 => __DIR__ . '/..' . '/wp-cli/mustangostang-spyc/src',
-        ),
-        'Doctrine\\Deprecations\\' => 
-        array (
-            0 => __DIR__ . '/..' . '/doctrine/deprecations/src',
-        ),
-        'Doctrine\\Common\\Collections\\' => 
-        array (
-            0 => __DIR__ . '/..' . '/doctrine/collections/lib/Doctrine/Common/Collections',
-        ),
-        'Alchemy\\Zippy\\' => 
-        array (
-            0 => __DIR__ . '/..' . '/alchemy/zippy/src',
         ),
     );
 
@@ -115,12 +79,7 @@ class ComposerStaticInit5af4d0e3cf543653d0f5b00685447b1f
     );
 
     public static $classMap = array (
-        'Attribute' => __DIR__ . '/..' . '/symfony/polyfill-php80/Resources/stubs/Attribute.php',
         'Composer\\InstalledVersions' => __DIR__ . '/..' . '/composer/InstalledVersions.php',
-        'PhpToken' => __DIR__ . '/..' . '/symfony/polyfill-php80/Resources/stubs/PhpToken.php',
-        'Stringable' => __DIR__ . '/..' . '/symfony/polyfill-php80/Resources/stubs/Stringable.php',
-        'UnhandledMatchError' => __DIR__ . '/..' . '/symfony/polyfill-php80/Resources/stubs/UnhandledMatchError.php',
-        'ValueError' => __DIR__ . '/..' . '/symfony/polyfill-php80/Resources/stubs/ValueError.php',
         'WP_CLI' => __DIR__ . '/..' . '/wp-cli/wp-cli/php/class-wp-cli.php',
         'WP_CLI_Command' => __DIR__ . '/..' . '/wp-cli/wp-cli/php/class-wp-cli-command.php',
     );

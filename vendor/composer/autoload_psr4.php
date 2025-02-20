@@ -6,15 +6,9 @@ $vendorDir = dirname(__DIR__);
 $baseDir = dirname($vendorDir);
 
 return array(
-    'Symfony\\Polyfill\\Php80\\' => array($vendorDir . '/symfony/polyfill-php80'),
-    'Symfony\\Polyfill\\Mbstring\\' => array($vendorDir . '/symfony/polyfill-mbstring'),
-    'Symfony\\Polyfill\\Ctype\\' => array($vendorDir . '/symfony/polyfill-ctype'),
-    'Symfony\\Component\\Process\\' => array($vendorDir . '/symfony/process'),
     'Symfony\\Component\\Finder\\' => array($vendorDir . '/symfony/finder'),
-    'Symfony\\Component\\Filesystem\\' => array($vendorDir . '/symfony/filesystem'),
     'RRZE\\CLI\\' => array($baseDir . '/includes'),
+    'Psr\\Http\\Message\\' => array($vendorDir . '/psr/http-message/src'),
+    'PhpZip\\' => array($vendorDir . '/nelexa/zip/src'),
     'Mustangostang\\' => array($vendorDir . '/wp-cli/mustangostang-spyc/src'),
-    'Doctrine\\Deprecations\\' => array($vendorDir . '/doctrine/deprecations/src'),
-    'Doctrine\\Common\\Collections\\' => array($vendorDir . '/doctrine/collections/lib/Doctrine/Common/Collections'),
-    'Alchemy\\Zippy\\' => array($vendorDir . '/alchemy/zippy/src'),
 );
