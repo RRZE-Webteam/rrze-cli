@@ -63,11 +63,6 @@ class Migration extends Command
             $assocArgs
         );
 
-        // error_log(print_r($this->args, true));
-        // error_log(print_r($this->assoc_args, true));
-
-        // error_log('current blog id: ' . get_current_blog_id());
-
         $blogId = get_current_blog_id();
         $metaKey = $this->assoc_args['meta_key'];
 
@@ -147,9 +142,6 @@ class Migration extends Command
         }
 
         restore_current_blog();
-
-        // // Log or return the results.
-        // error_log(print_r($postsWithMeta, true));
 
         if ($success) {
             WP_CLI::success('Migration completed successfully.');
