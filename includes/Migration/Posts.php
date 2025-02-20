@@ -12,8 +12,8 @@ use WP_CLI;
  *
  * ## EXAMPLES
  *
- *     # Updates all post_author values on the website with ID=2 based on the map_users.json file.
- *     $ wp rrze-migration posts update_author map_users.json --blog_id=2
+ * Updates all post_author values on the website with ID=2 based on the map_users.json file.
+ * wp rrze-migration posts update_author map_users.json --blog_id=2
  * 
  * @package RRZE\CLI
  */
@@ -38,8 +38,8 @@ class Posts extends Command
      * 
      * ## EXAMPLES
      * 
-     *     # Updates all post_author values on the website with ID=2 based on the users_map.json file and the user meta field _user_meta_field.
-     *     $ wp rrze-migration posts update_author users_map.json --blog_id=2 --uid_fields=_user_meta_field
+     * Updates all post_author values on the website with ID=2 based on the users_map.json file and the user meta field _user_meta_field.
+     * wp rrze-migration posts update_author users_map.json --blog_id=2 --uid_fields=_user_meta_field
      *
      * @param array $args
      * @param array $assoc_args
