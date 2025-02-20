@@ -20,6 +20,200 @@ use WP_CLI;
 class Import extends Command
 {
     /**
+     * Imports a new website from a zip package.
+     * 
+     * This command will perform the search-replace as well as
+     * the necessary updates to make the new website work with a multisite instance.
+     * 
+     * ## OPTIONS
+     *
+     * <inputfile>
+     * : The name of the exported ZIP file.
+     * 
+     * [--blog_id=<blog_id>]
+     * : The ID of the website where the content of the ZIP file will be imported. It is required if the import is done in a multisite instance.
+     * 
+     * [--new_url=<new_domain>]
+     * : The new hostname of the website into which the ZIP file content is imported.
+     * 
+     * [--mysql-single-transaction]
+     * : Wrap the exported SQL in a single transaction.
+     * 
+     * [--uid_fields=<uid_fields>]
+     * : User meta field.
+     * 
+     * [--verbose]
+     * : Display additional details during command execution.
+     * 
+     * ## EXAMPLES
+     * 
+     *     # Imports a website from the compressed file website.zip.
+     *     $ wp rrze-migration import all website.zip
+     *
+     * @param array $args
+     * @param array $assoc_args
+     */
+    public function all($args = [], $assoc_args = [])
+    {
+        $this->process_args(
+            [
+                0 => '', // .zip file to import.
+            ],
+            $args,
+            [
+                'blog_id'                  => '',
+                'new_url'                  => '',
+                'mysql-single-transaction' => false,
+                'uid_fields'               => '',
+            ],
+            $assoc_args
+        );
+
+        $is_multisite = is_multisite();
+
+        $verbose = false;
+
+        if (isset($assoc_args['verbose'])) {
+            $verbose = true;
+        }
+
+        $assoc_args = $this->assoc_args;
+
+        $filename = ABSPATH . '/' . $this->args[0];
+
+        if (!Utils::is_zip_file($filename)) {
+            WP_CLI::error(__('The provided file does not appear to be a zip file', 'rrze-cli'));
+        }
+
+        $temp_dir = ABSPATH . '/' . 'rrze-migration-' . time() . '/';
+
+        WP_CLI::log(__('Extracting zip package...', 'rrze-cli'));
+
+        // Extract the file to the $temp_dir.
+        Utils::extract($filename, $temp_dir);
+
+        // Looks for required (.json, .csv and .sql) files and for the optional folders
+        // that can live in the zip package (plugins, themes and uploads).
+        $site_meta_data = glob($temp_dir . '*.json');
+        $users          = glob($temp_dir . '*.csv');
+        $sql            = glob($temp_dir . '*.sql');
+        $plugins_folder = glob($temp_dir . 'wp-content/plugins');
+        $themes_folder  = glob($temp_dir . 'wp-content/themes');
+        $uploads_folder = glob($temp_dir . 'wp-content/uploads');
+
+        if (empty($site_meta_data) || empty($users) || empty($sql)) {
+            WP_CLI::error(__("There's something wrong with the zip package, unable to find required files", 'rrze-cli'));
+        }
+
+        $site_meta_data = json_decode(file_get_contents($site_meta_data[0]));
+
+        $old_url = $site_meta_data->url;
+
+        if (!empty($assoc_args['new_url'])) {
+            $site_meta_data->url = $assoc_args['new_url'];
+        }
+
+        if (empty($assoc_args['blog_id']) && $is_multisite) {
+            $blog_id = $this->create_new_site($site_meta_data);
+        } else if ($is_multisite) {
+            $blog_id = (int) $assoc_args['blog_id'];
+        } else {
+            $blog_id = 1;
+        }
+
+        if (!$blog_id) {
+            WP_CLI::error(__('Unable to create new site', 'rrze-cli'));
+        }
+
+        $tables_assoc_args = [
+            'blog_id'          => $blog_id,
+            'original_blog_id' => $site_meta_data->blog_id,
+            'old_prefix'       => $site_meta_data->db_prefix,
+            'new_prefix'       => Utils::get_db_prefix($blog_id),
+        ];
+
+        /*
+         * If changing URL, then set the proper params to force search-replace in the tables method.
+         */
+        if (!empty($assoc_args['new_url'])) {
+            $tables_assoc_args['new_url'] = esc_url($assoc_args['new_url']);
+            $tables_assoc_args['old_url'] = esc_url($old_url);
+        }
+
+        WP_CLI::log(__('Importing tables...', 'rrze-cli'));
+
+        /*
+         * If the flag --mysql-single-transaction is passed, then the SQL is wrapped with
+         * START TRANSACTION and COMMIT to insert in one single transaction.
+         */
+        if ($assoc_args['mysql-single-transaction']) {
+            Utils::addTransaction($sql[0]);
+        }
+
+        $this->tables([$sql[0]], $tables_assoc_args, $verbose);
+
+        $this->delete_transients($site_meta_data);
+
+        $map_file = $temp_dir . '/users_map.json';
+
+        $users_assoc_args = [
+            'map_file' => $map_file,
+            'blog_id'  => $blog_id,
+        ];
+
+        WP_CLI::log(__('Moving files...', 'rrze-cli'));
+
+        if (!empty($plugins_folder)) {
+            $blog_plugins = isset($site_meta_data->blog_plugins) ? (array) $site_meta_data->blog_plugins : false;
+            $network_plugins = isset($site_meta_data->network_plugins) ? array_keys((array) $site_meta_data->network_plugins) : false;
+            $this->move_and_activate_plugins($plugins_folder[0], (array) $site_meta_data->plugins, $blog_plugins, $network_plugins);
+        }
+
+        if (!empty($uploads_folder)) {
+            $this->move_uploads($uploads_folder[0], $blog_id);
+        }
+
+        if (!empty($themes_folder)) {
+            $this->move_themes($themes_folder[0]);
+        }
+
+        WP_CLI::log(__('Importing Users...', 'rrze-cli'));
+
+        $this->users([$users[0]], $users_assoc_args, $verbose);
+
+        if (file_exists($map_file)) {
+            $postsCommand = new Posts();
+
+            $postsCommand->update_author(
+                [$map_file],
+                [
+                    'blog_id' => $blog_id,
+                    'uid_fields' => $assoc_args['uid_fields'],
+                ],
+                $verbose
+            );
+        }
+
+        WP_CLI::log(__('Flushing rewrite rules...', 'rrze-cli'));
+
+        add_action('init', function () use ($blog_id) {
+            // Flush the rewrite rules for the newly created site, just in case.
+            Utils::maybe_switch_to_blog($blog_id);
+            flush_rewrite_rules();
+            Utils::maybe_restore_current_blog();
+        }, 9999);
+
+        WP_CLI::log(__('Removing temporary files....', 'rrze-cli'));
+
+        Utils::delete_folder($temp_dir);
+
+        WP_CLI::success(sprintf(
+            __('All done, your new site is available at %s. Remember to flush the cache (memcache, redis etc).', 'rrze-cli'),
+            esc_url($site_meta_data->url)
+        ));
+    }
+
+    /**
      * Imports all users from a CVS file.
      *
      * This command will create a map file containing the new user_id for each user.
@@ -400,204 +594,6 @@ class Import extends Command
 
             Utils::maybe_restore_current_blog();
         }
-    }
-
-    /**
-     * Imports a new website from a zip package.
-     * 
-     * This command will perform the search-replace as well as
-     * the necessary updates to make the new website work with a multisite instance.
-     * 
-     * ## OPTIONS
-     *
-     * <inputfile>
-     * : The name of the exported ZIP file.
-     * 
-     * [--blog_id=<blog_id>]
-     * : The ID of the website where the content of the ZIP file will be imported. It is required if the import is done in a multisite instance.
-     * 
-     * [--new_url=<new_domain>]
-     * : The new hostname of the website into which the ZIP file content is imported.
-     * 
-     * [--mysql-single-transaction]
-     * : Wrap the exported SQL in a single transaction.
-     * 
-     * [--uid_fields=<uid_fields>]
-     * : User meta field.
-     * 
-     * [--verbose]
-     * : Display additional details during command execution.
-     * 
-     * ## EXAMPLES
-     * 
-     *     # Imports a website from the compressed file website.zip.
-     *     $ wp rrze-migration import all website.zip
-     *
-     * @param array $args
-     * @param array $assoc_args
-     */
-    public function all($args = [], $assoc_args = [])
-    {
-        $this->process_args(
-            [],
-            $args,
-            [
-                'blog_id'                  => '',
-                'new_url'                  => '',
-                'mysql-single-transaction' => false,
-                'uid_fields'               => '',
-            ],
-            $assoc_args
-        );
-
-        $is_multisite = is_multisite();
-
-        $verbose = false;
-
-        if (isset($assoc_args['verbose'])) {
-            $verbose = true;
-        }
-
-        $assoc_args = $this->assoc_args;
-
-        $filename = ABSPATH . '/' . $this->args[0];
-
-        if (!Utils::is_zip_file($filename)) {
-            WP_CLI::error(__('The provided file does not appear to be a zip file', 'rrze-cli'));
-        }
-
-        $temp_dir = ABSPATH . '/' . 'rrze-migration-' . time() . '/';
-
-        WP_CLI::log(__('Extracting zip package...', 'rrze-cli'));
-
-        /*
-         * Extract the file to the $temp_dir.
-         */
-        Utils::extract($filename, $temp_dir);
-
-        /*
-         * Looks for required (.json, .csv and .sql) files and for the optional folders
-         * that can live in the zip package (plugins, themes and uploads).
-         */
-        $site_meta_data = glob($temp_dir . '*.json');
-        $users          = glob($temp_dir . '*.csv');
-        $sql            = glob($temp_dir . '*.sql');
-        $plugins_folder = glob($temp_dir . 'wp-content/plugins');
-        $themes_folder  = glob($temp_dir . 'wp-content/themes');
-        $uploads_folder = glob($temp_dir . 'wp-content/uploads');
-
-        if (empty($site_meta_data) || empty($users) || empty($sql)) {
-            WP_CLI::error(__("There's something wrong with the zip package, unable to find required files", 'rrze-cli'));
-        }
-
-        $site_meta_data = json_decode(file_get_contents($site_meta_data[0]));
-
-        $old_url = $site_meta_data->url;
-
-        if (!empty($assoc_args['new_url'])) {
-            $site_meta_data->url = $assoc_args['new_url'];
-        }
-
-        if (empty($assoc_args['blog_id']) && $is_multisite) {
-            $blog_id = $this->create_new_site($site_meta_data);
-        } else if ($is_multisite) {
-            $blog_id = (int) $assoc_args['blog_id'];
-        } else {
-            $blog_id = 1;
-        }
-
-        if (!$blog_id) {
-            WP_CLI::error(__('Unable to create new site', 'rrze-cli'));
-        }
-
-        $tables_assoc_args = [
-            'blog_id'          => $blog_id,
-            'original_blog_id' => $site_meta_data->blog_id,
-            'old_prefix'       => $site_meta_data->db_prefix,
-            'new_prefix'       => Utils::get_db_prefix($blog_id),
-        ];
-
-        /*
-         * If changing URL, then set the proper params to force search-replace in the tables method.
-         */
-        if (!empty($assoc_args['new_url'])) {
-            $tables_assoc_args['new_url'] = esc_url($assoc_args['new_url']);
-            $tables_assoc_args['old_url'] = esc_url($old_url);
-        }
-
-        WP_CLI::log(__('Importing tables...', 'rrze-cli'));
-
-        /*
-         * If the flag --mysql-single-transaction is passed, then the SQL is wrapped with
-         * START TRANSACTION and COMMIT to insert in one single transaction.
-         */
-        if ($assoc_args['mysql-single-transaction']) {
-            Utils::addTransaction($sql[0]);
-        }
-
-        $this->tables([$sql[0]], $tables_assoc_args, $verbose);
-
-        $this->delete_transients($site_meta_data);
-
-        $map_file = $temp_dir . '/users_map.json';
-
-        $users_assoc_args = [
-            'map_file' => $map_file,
-            'blog_id'  => $blog_id,
-        ];
-
-        WP_CLI::log(__('Moving files...', 'rrze-cli'));
-
-        if (!empty($plugins_folder)) {
-            $blog_plugins = isset($site_meta_data->blog_plugins) ? (array) $site_meta_data->blog_plugins : false;
-            $network_plugins = isset($site_meta_data->network_plugins) ? array_keys((array) $site_meta_data->network_plugins) : false;
-            $this->move_and_activate_plugins($plugins_folder[0], (array) $site_meta_data->plugins, $blog_plugins, $network_plugins);
-        }
-
-        if (!empty($uploads_folder)) {
-            $this->move_uploads($uploads_folder[0], $blog_id);
-        }
-
-        if (!empty($themes_folder)) {
-            $this->move_themes($themes_folder[0]);
-        }
-
-        WP_CLI::log(__('Importing Users...', 'rrze-cli'));
-
-        $this->users([$users[0]], $users_assoc_args, $verbose);
-
-        if (file_exists($map_file)) {
-            $postsCommand = new Posts();
-
-            $postsCommand->update_author(
-                [$map_file],
-                [
-                    'blog_id' => $blog_id,
-                    'uid_fields' => $assoc_args['uid_fields'],
-                ],
-                $verbose
-            );
-        }
-
-        WP_CLI::log(__('Flushing rewrite rules...', 'rrze-cli'));
-
-        add_action('init', function () use ($blog_id) {
-            /*
-             * Flush the rewrite rules for the newly created site, just in case.
-             */
-            Utils::maybe_switch_to_blog($blog_id);
-            flush_rewrite_rules();
-            Utils::maybe_restore_current_blog();
-        }, 9999);
-
-        WP_CLI::log(__('Removing temporary files....', 'rrze-cli'));
-
-        Utils::delete_folder($temp_dir);
-
-        WP_CLI::success(sprintf(
-            __('All done, your new site is available at %s. Remember to flush the cache (memcache, redis etc).', 'rrze-cli'),
-            esc_url($site_meta_data->url)
-        ));
     }
 
     /**
