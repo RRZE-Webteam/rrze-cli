@@ -300,6 +300,10 @@ class Utils
         $zipFile = new ZipFile();
         try {
             foreach ($files_to_zip as $key => $file) {
+                if (is_dir($file)) {
+                    $zipFile->addDirRecursive($file, $key); // add a directory and all its contents
+                    continue;
+                }
                 $zipFile->addFile($file, $key); // add an entry from the file
             }
             $zipFile
