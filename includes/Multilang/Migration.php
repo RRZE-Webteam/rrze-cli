@@ -4,21 +4,12 @@ namespace RRZE\CLI\Multilang;
 
 defined('ABSPATH') || exit;
 
-use RRZE\CLI\{Command, Utils};
+use RRZE\CLI\Command;
 use WP_CLI;
 
 /**
  * Class Migration
  * Migrate multilingual post meta data from workflow plugin to multilang plugin.
- * 
- * $ wp rrze-multilang migration workflow <main|secondary> [--force] --meta_key=<meta_key> --url=<url>
- * <main|secondary> : The main or secondary blog ID.
- * --force : Forces rewriting of metadata.
- * --meta_key : The meta key to migrate.
- * --url : The URL of the website.
- * Examples:
- * wp rrze-multilang migration workflow main --meta_key=_version_remote_parent_post_meta --url=www.site.de.localhost
- * wp rrze-multilang migration workflow secondary --meta_key=_version_remote_post_meta --url=www.site.eu.localhost
  * 
  * @package RRZE\CLI\Multilang
  */
@@ -31,6 +22,21 @@ class Migration extends Command
 
     /**
      * Migrate multilingual post meta data from workflow plugin to multilang plugin.
+     * 
+     * ## OPTIONS
+     * <main|secondary>
+     * : The main or secondary website.
+     * [--force]
+     * : Forces rewriting of metadata.
+     * --meta_key=<meta_key>
+     * : The meta key to migrate.
+     * [--url=<url>]
+     * : The URL of the website.
+     * 
+     * ## EXAMPLES
+     * wp rrze-multilang migration workflow main --meta_key=_version_remote_parent_post_meta --url=www.site.de
+     * wp rrze-multilang migration workflow secondary --meta_key=_version_remote_post_meta --url=www.site.eu
+     * 
      * @param array $args
      * @param array $assocArgs
      * @param bool $verbose
@@ -76,6 +82,12 @@ class Migration extends Command
         $this->start($blogId, $metaKey);
     }
 
+    /**
+     * Start the migration process.
+     * @param int $blogId
+     * @param string $metaKey
+     * @return void
+     */
     private function start($blogId, $metaKey)
     {
         switch_to_blog($blogId);
