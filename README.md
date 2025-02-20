@@ -32,6 +32,8 @@ $ wp rrze-migration export all --url=website-url --custom-tables=custom_table_1,
 
 If you pass `--tables`, only the specified tables will be exported. Therefore, when using this option, ensure that all necessary tables, including WordPress default tables, are included in the export.
 
+If you pass `--uploads`, the files in the media library will also be exported. However, it is only recommended to use this option where the media library does not exceed 500 MB in total. Otherwise, it is recommended to use `rsync` for example.
+
 ### Import
 
 The `rrze-migration import` command can be used to import a website from a ZIP package.
