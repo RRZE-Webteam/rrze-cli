@@ -1,7 +1,7 @@
 {
     "require": {
         "php": "^8.2.0",
-        "alchemy/zippy": "^1.0.0"
+        "nelexa/zip": "^4.0"
     },
     "require-dev": {
         "wp-cli/wp-cli": "^v2.11.0"
