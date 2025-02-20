@@ -690,7 +690,7 @@ class Import extends Command
             'network_id' => $site_id
         ]);
 
-        if (!$blog_id) {
+        if (is_wp_error($blog_id)) {
             return false;
         }
 
