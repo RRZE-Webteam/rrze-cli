@@ -30,9 +30,6 @@ class Import extends Command
      * <inputfile>
      * : The name of the exported ZIP file.
      * 
-     * [--blog_id=<blog_id>]
-     * : The ID of the website where the content of the ZIP file will be imported. It is required if the import is done in a multisite instance.
-     * 
      * [--new_url=<new_domain>]
      * : The new hostname of the website into which the ZIP file content is imported.
      * 
@@ -61,15 +58,12 @@ class Import extends Command
             ],
             $args,
             [
-                'blog_id'                  => '',
                 'new_url'                  => '',
                 'mysql-single-transaction' => false,
                 'uid_fields'               => '',
             ],
             $assoc_args
         );
-
-        $is_multisite = is_multisite();
 
         $verbose = false;
 
@@ -113,16 +107,14 @@ class Import extends Command
             $site_meta_data->url = $assoc_args['new_url'];
         }
 
-        if (empty($assoc_args['blog_id']) && $is_multisite) {
+        if (is_multisite()) {
             $blog_id = $this->create_new_site($site_meta_data);
-        } else if ($is_multisite) {
-            $blog_id = (int) $assoc_args['blog_id'];
         } else {
-            $blog_id = 1;
+            $blog_id = get_current_blog_id(); // Single site.
         }
 
         if (!$blog_id) {
-            WP_CLI::error(__('Unable to create new site', 'rrze-cli'));
+            WP_CLI::error(__('Could not get blog ID value', 'rrze-cli'));
         }
 
         $tables_assoc_args = [
@@ -132,9 +124,7 @@ class Import extends Command
             'new_prefix'       => Utils::get_db_prefix($blog_id),
         ];
 
-        /*
-         * If changing URL, then set the proper params to force search-replace in the tables method.
-         */
+        // If changing URL, then set the proper params to force search-replace in the tables method.
         if (!empty($assoc_args['new_url'])) {
             $tables_assoc_args['new_url'] = esc_url($assoc_args['new_url']);
             $tables_assoc_args['old_url'] = esc_url($old_url);
@@ -142,10 +132,8 @@ class Import extends Command
 
         WP_CLI::log(__('Importing tables...', 'rrze-cli'));
 
-        /*
-         * If the flag --mysql-single-transaction is passed, then the SQL is wrapped with
-         * START TRANSACTION and COMMIT to insert in one single transaction.
-         */
+        // If the flag --mysql-single-transaction is passed, then the SQL is wrapped with
+        // START TRANSACTION and COMMIT to insert in one single transaction.
         if ($assoc_args['mysql-single-transaction']) {
             Utils::addTransaction($sql[0]);
         }
@@ -208,7 +196,7 @@ class Import extends Command
         Utils::delete_folder($temp_dir);
 
         WP_CLI::success(sprintf(
-            __('All done, your new site is available at %s. Remember to flush the cache (memcache, redis etc).', 'rrze-cli'),
+            __('All done, your new site is available at %s. Remember to flush the cache.', 'rrze-cli'),
             esc_url($site_meta_data->url)
         ));
     }
@@ -644,7 +632,7 @@ class Import extends Command
     private function move_uploads($uploads_dir, $blog_id)
     {
         if (file_exists($uploads_dir)) {
-            WP_CLI::log(__('Moving Uploads...', 'rrze-cli'));
+            WP_CLI::log(__('Moving uploads...', 'rrze-cli'));
             Utils::maybe_switch_to_blog($blog_id);
             $dest_uploads_dir = wp_upload_dir();
             Utils::maybe_restore_current_blog();
