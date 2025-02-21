@@ -338,11 +338,12 @@ class Utils
         $params = sprintf('%s %s', implode(' ', $args), implode(' ', $transformed_assoc_args));
 
         $options = [
-            'return'     => 'all',
-            'launch'     => false,
-            'exit_error' => false,
+            'return'     => 'all', // Returns all data
+            'launch'     => false, // Do not start a new system process
+            'exit_error' => false, // Prevent WP-CLI from stopping execution on error
         ];
 
+        error_log(sprintf('%s %s', $command, $params));
         return WP_CLI::runcommand(sprintf('%s %s', $command, $params), $options);
     }
 
