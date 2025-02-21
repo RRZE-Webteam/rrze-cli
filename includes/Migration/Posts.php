@@ -66,7 +66,8 @@ class Posts extends Command
         $is_multisite = is_multisite();
 
         if (empty($filename) || !file_exists($filename)) {
-            WP_CLI::error(__('Invalid input file', 'rrze-cli'));
+            WP_CLI::warning(__('Invalid input file', 'rrze-cli'));
+            return;
         }
 
         if ($is_multisite) {
@@ -78,7 +79,7 @@ class Posts extends Command
         $ids_map = json_decode(file_get_contents($filename));
 
         if (null === $ids_map) {
-            WP_CLI::error(
+            WP_CLI::warning(
                 __('An error has occurred when parsing the json file', 'rrze-cli')
             );
         }
@@ -152,7 +153,6 @@ class Posts extends Command
             }
         );
 
-        // Verbose
         if (!empty($author_not_found)) {
             $this->warning(sprintf(
                 __('%d records failed to update its post_author: %s', 'rrze-cli'),
