@@ -5,7 +5,6 @@ namespace RRZE\CLI;
 defined('ABSPATH') || exit;
 
 use WP_CLI_Command;
-use function RRZE\CLI\plugin;
 
 /**
  * @package RRZE\CLI

@@ -9,57 +9,163 @@ use WP_CLI;
 
 /**
  * Exports an entire website into a zip package.
- *
- * ## EXAMPLES
- *
- *     # Exports users, tables, plugins folder, themes folder and the uploads folder to a ZIP file.
- *     $ wp rrze-migration export all website.zip --plugins --themes --uploads
  * 
  * @package RRZE\CLI
  */
 class Export extends Command
 {
     /**
-     * Returns the Headers (first row) for the CSV export file.
+     * Exports a website to a ZIP file.
      *
-     * @return array
-     * @internal
+     * ## OPTIONS
+     * 
+     * [<outputfile>]
+     * : The name of the exported ZIP file.
+     * 
+     * [--tables=<table_list>]
+     * : Comma-separated list of tables to be exported.
+     * 
+     * [--custom-tables=<custom_table_list>]
+     * : Comma-separated list of non-standard tables to be exported.
+     * 
+     * [--plugins]
+     * : Includes the whole plugins directory. Don't use this option if you don't know what you're doing.
+     * 
+     * [--themes]
+     * : Includes website theme/child directory. Don't use this option if you don't know what you're doing.
+     * 
+     * [--uploads]
+     * : Includes website uploads directory. Don't use this option if you don't know what you're doing.
+     * 
+     * [--verbose]
+     * : Display additional details during command execution.
+     * 
+     * ## EXAMPLES
+     * 
+     * Exports a website to website.zip file.
+     * wp rrze-migration export all [--url=website-url]
+     *
+     * @param array $args
+     * @param array $assoc_args
      */
-    public static function getCSVHeaders()
+    public function all($args = [], $assoc_args = [])
     {
-        $headers = [
-            // General Info.
-            'ID',
-            'user_login',
-            'user_pass',
-            'user_nicename',
-            'user_email',
-            'user_url',
-            'user_registered',
-            'role',
-            'user_status',
-            'display_name',
+        global $wpdb;
 
-            // User Meta.
-            'rich_editing',
-            'admin_color',
-            'show_admin_bar_front',
-            'first_name',
-            'last_name',
-            'nickname',
-            'aim',
-            'yim',
-            'jabber',
-            'description',
-        ];
+        $verbose = false;
 
-        $custom_headers = apply_filters('rrze_migration/export/user/headers', []);
-
-        if (!empty($custom_headers)) {
-            $headers = array_merge($headers, $custom_headers);
+        if (isset($assoc_args['verbose'])) {
+            $verbose = true;
         }
 
-        return $headers;
+        $blogId = get_current_blog_id();
+
+        $site_data = [
+            'url'             => esc_url(home_url()),
+            'name'            => sanitize_text_field(get_bloginfo('name')),
+            'admin_email'     => sanitize_text_field(get_bloginfo('admin_email')),
+            'site_language'   => sanitize_text_field(get_bloginfo('language')),
+            'db_prefix'       => $wpdb->prefix,
+            'plugins'         => get_plugins(),
+            'blog_plugins'    => get_option('active_plugins'),
+            'network_plugins' => is_multisite() ? get_site_option('active_sitewide_plugins') : [],
+            'blog_id'         => $blogId
+        ];
+
+        $this->process_args(
+            [
+                0 => 'rrze-migration-' . sanitize_title($site_data['name']) . '.zip',
+            ],
+            $args,
+            [
+                'tables'        => '',
+                'custom-tables' => '',
+            ],
+            $assoc_args
+        );
+
+        $zip_file = ABSPATH . $this->args[0];
+
+        $include_plugins = isset($this->assoc_args['plugins']) ? true : false;
+        $include_themes  = isset($this->assoc_args['themes']) ? true : false;
+        $include_uploads = isset($this->assoc_args['uploads']) ? true : false;
+
+        $users_assoc_args  = [];
+        $tables_assoc_args = [
+            'tables'        => $this->assoc_args['tables'],
+            'custom-tables' => $this->assoc_args['custom-tables'],
+        ];
+
+        $users_assoc_args['blog_id']  = $blogId;
+        $tables_assoc_args['blog_id'] = $blogId;
+
+        // Adds a random prefix to temporary file names to ensure uniqueness and also for security reasons.
+        $rand = bin2hex(random_bytes(8));
+        $users_file = 'rrze-migration-' . $rand . '-' . sanitize_title($site_data['name']) . '.csv';
+        $tables_file = 'rrze-migration-' . $rand . '-' . sanitize_title($site_data['name']) . '.sql';
+        $meta_data_file = 'rrze-migration-' . $rand . '-' . sanitize_title($site_data['name']) . '.json';
+
+        WP_CLI::log(__('Exporting site meta data...', 'rrze-cli'));
+        file_put_contents($meta_data_file, wp_json_encode($site_data));
+
+        WP_CLI::log(__('Exporting users...', 'rrze-cli'));
+        $this->users(array($users_file), $users_assoc_args, $verbose);
+
+        WP_CLI::log(__('Exporting tables...', 'rrze-cli'));
+        $this->tables(array($tables_file), $tables_assoc_args, $verbose);
+
+        // Removing previous $zip_file, if any.
+        if (file_exists($zip_file)) {
+            unlink($zip_file);
+        }
+
+        $files_to_zip = [
+            $users_file     => ABSPATH . $users_file,
+            $tables_file    => ABSPATH . $tables_file,
+            $meta_data_file => ABSPATH . $meta_data_file,
+        ];
+
+        if ($include_plugins) {
+            WP_CLI::log(__('Including plugins directory...', 'rrze-cli'));
+            $files_to_zip['wp-content/plugins'] = WP_PLUGIN_DIR;
+        }
+
+        if ($include_themes) {
+            WP_CLI::log(__('Including themes directory...', 'rrze-cli'));
+            $theme_dir = get_template_directory();
+            $files_to_zip['wp-content/themes/' . basename($theme_dir)] = $theme_dir;
+            if (get_template_directory() !== get_stylesheet_directory()) {
+                $child_theme_dir = get_stylesheet_directory();
+                $files_to_zip['wp-content/themes/' . basename($child_theme_dir)] = $child_theme_dir;
+            }
+        }
+
+        if ($include_uploads) {
+            WP_CLI::log(__('Including website uploads directory...', 'rrze-cli'));
+            $upload_dir = wp_upload_dir();
+            $files_to_zip['wp-content/uploads'] = $upload_dir['basedir'];
+        }
+
+        WP_CLI::log(__('Zipping files...', 'rrze-cli'));
+        Utils::zip($zip_file, $files_to_zip);
+
+        if (file_exists($users_file)) {
+            unlink($users_file);
+        }
+
+        if (file_exists($tables_file)) {
+            unlink($tables_file);
+        }
+
+        if (file_exists($meta_data_file)) {
+            unlink($meta_data_file);
+        }
+
+        if (file_exists($zip_file)) {
+            WP_CLI::success(sprintf(__('A zip file named %s has been created', 'rrze-cli'), $zip_file));
+        } else {
+            WP_CLI::warning(__('Something went wrong while trying to create the zip file', 'rrze-cli'));
+        }
     }
 
     /**
@@ -67,11 +173,8 @@ class Export extends Command
      * 
      * ## OPTIONS
      *
-     * <outputfile>
+     * [<outputfile>]
      * : The name of the exported SQL file.
-     * 
-     * [--blog_id=<blog_id>]
-     * : The ID of the website to export.
      * 
      * [--tables=<table_list>]
      * : Comma-separated list of tables to be exported.
@@ -81,8 +184,8 @@ class Export extends Command
      * 
      * ## EXAMPLES
      * 
-     *     # Exports all standard tables of a website to output.sql file.
-     *     $ wp rrze-migration export tables output.sql
+     *     # Exports all standard tables of a website to a sql file.
+     *     $ wp rrze-migration export tables [--url=website-url]
      *
      * @param array $args
      * @param array $assoc_args
@@ -94,11 +197,10 @@ class Export extends Command
 
         $this->process_args(
             [
-                0 => '', // output file name
+                0 => 'rrze-migration-' . sanitize_text_field(get_bloginfo('name')) . '.sql',
             ],
             $args,
             [
-                'blog_id'       => 1,
                 'tables'        => '',
                 'custom-tables' => '',
             ],
@@ -106,18 +208,17 @@ class Export extends Command
         );
 
         $filename = $this->args[0];
-
-        if (isset($this->assoc_args['blog_id'])) {
-            $url = get_home_url((int) $this->assoc_args['blog_id']);
+        if (empty($filename)) {
+            WP_CLI::error(__('Please provide a filename for the exported SQL file', 'rrze-cli'));
         }
 
-        /*
-         * If the tables to be exported have not been provided, obtain them automatically.
-         */
+        $url = get_home_url();
+
+        // If the tables to be exported have not been provided, obtain them automatically.
         if (empty($this->assoc_args['tables'])) {
             $assoc_args = ['format' => 'csv'];
 
-            if (empty($this->assoc_args['custom-tables']) && ($this->assoc_args['blog_id'] != 1 || !is_multisite())) {
+            if (empty($this->assoc_args['custom-tables'])) {
                 $assoc_args['all-tables-with-prefix'] = 1;
             }
 
@@ -176,11 +277,8 @@ class Export extends Command
      *
      * ## OPTIONS
      *
-     * <outputfile>
+     * [<outputfile>]
      * : The name of the exported CSV file.
-     * 
-     * [--blog_id=<blog_id>]
-     * : The ID of the website to export.
      * 
      * [--woocomerce]
      * : Include all wc_customer_user (if WooCommerce is installed).
@@ -188,7 +286,7 @@ class Export extends Command
      * ## EXAMPLES
      * 
      *     # Exports all website users and wc_customer_user with ID=2 to a CSV file.
-     *     $ wp rrze-migration export users output.csv --blog_id=2 --woocomerce
+     *     $ wp rrze-migration export users --woocomerce [--url=website-url]
      *
      * @param array $args
      * @param array $assoc_args
@@ -196,13 +294,15 @@ class Export extends Command
      */
     public function users($args = [], $assoc_args = [], $verbose = true)
     {
+        $blogId = get_current_blog_id();
+
         $this->process_args(
             [
-                0 => 'users.csv',
+                0 => 'rrze-migration-' . sanitize_text_field(get_bloginfo('name')) . '.csv',
             ],
             $args,
             [
-                'blog_id' => '',
+                'woocomerce' => false,
             ],
             $assoc_args
         );
@@ -216,15 +316,13 @@ class Export extends Command
             WP_CLI::error(__('Impossible to create the file', 'rrze-cli'));
         }
 
-        $headers = self::getCSVHeaders();
+        $headers = self::getUserCSVHeaders();
 
         $users_args = [
             'fields' => 'all',
         ];
 
-        if (!empty($this->assoc_args['blog_id'])) {
-            $users_args['blog_id'] = (int) $this->assoc_args['blog_id'];
-        }
+        $users_args['blog_id'] = $blogId;
 
         $excluded_meta_keys = [
             'session_tokens' => true,
@@ -232,9 +330,7 @@ class Export extends Command
             'source_domain'  => true,
         ];
 
-        /*
-         * Do not include meta keys that depend on the db prefix.
-         */
+        // Do not include meta keys that depend on the db prefix.
         $excluded_meta_keys_regex = [
             '/capabilities$/',
             '/user_level$/',
@@ -247,9 +343,7 @@ class Export extends Command
         $users = get_users($users_args);
         $user_data_arr = [];
 
-        /*
-         * This first foreach will find all users meta stored in the usersmeta table.
-         */
+        // This first foreach will find all users meta stored in the usersmeta table.
         foreach ($users as $user) {
             $role = isset($user->roles[0]) ? $user->roles[0] : '';
 
@@ -277,12 +371,11 @@ class Export extends Command
                 $user->get('yim'),
                 $user->get('jabber'),
                 $user->get('description'),
+                $user->get('_application_passwords'),
             ];
 
-            /*
-             * Keeping arrays consistent, not all users have the same meta, so it's possible to have some users who
-             * don't even have a given meta key. It must be ensured that these users have an empty column for these fields.
-             */
+            // Keeping arrays consistent, not all users have the same meta, so it's possible to have some users who
+            // don't even have a given meta key. It must be ensured that these users have an empty column for these fields.
             if (count($headers) - count($user_data) > 0) {
                 $user_temp_data_arr = array_fill(0, count($headers) - count($user_data), '');
                 $user_data = array_merge($user_data, $user_temp_data_arr);
@@ -293,16 +386,12 @@ class Export extends Command
             $user_meta = get_user_meta($user->data->ID);
             $meta_keys = array_keys($user_meta);
 
-            /*
-             * Removing all unwanted meta keys.
-             */
+            // Removing all unwanted meta keys.
             foreach ($meta_keys as $user_meta_key) {
                 if (!isset($excluded_meta_keys[$user_meta_key])) {
                     $can_add = true;
 
-                    /*
-                     * Checking for unwanted meta keys.
-                     */
+                    // Checking for unwanted meta keys.
                     foreach ($excluded_meta_keys_regex as $regex) {
                         if (preg_match($regex, $user_meta_key)) {
                             $can_add = false;
@@ -346,7 +435,7 @@ class Export extends Command
              * @param array
              * @param \WP_User $user The user object.
              */
-            $custom_user_data = apply_filters('rrze_migration/export/user/data', [], $user);
+            $custom_user_data = apply_filters('rrze_migration_export_user_data', [], $user);
 
             if (!empty($custom_user_data)) {
                 $user_data = array_merge($user_data, $custom_user_data);
@@ -360,9 +449,7 @@ class Export extends Command
             $count++;
         }
 
-        /*
-         * Once all the meta keys of the users are obtained, everything can be saved in a csv file.
-         */
+        // Once all the meta keys of the users are obtained, everything can be saved in a csv file.
         fputcsv($file_handler, $headers, $delimiter);
 
         foreach ($user_data_arr as $user_data) {
@@ -382,180 +469,50 @@ class Export extends Command
     }
 
     /**
-     * Exports a website to a ZIP file.
+     * Returns the User Headers (first row) for the CSV export file.
      *
-     * ## OPTIONS
-     *
-     * <outputfile>
-     * : The name of the exported ZIP file.
-     * 
-     * [--blog_id=<blog_id>]
-     * : The ID of the website to export.
-     * 
-     * [--tables=<table_list>]
-     * : Comma-separated list of tables to be exported.
-     * 
-     * [--custom-tables=<custom_table_list>]
-     * : Comma-separated list of non-standard tables to be exported.
-     * 
-     * [--plugins]
-     * : Includes the whole plugins directory.
-     * 
-     * [--themes]
-     * : Includes website theme/child directory.
-     * 
-     * [--uploads]
-     * : Includes website uploads directory.
-     * 
-     * [--verbose]
-     * : Display additional details during command execution.
-     * 
-     * ## EXAMPLES
-     * 
-     *     # Exports a website to website.zip file.
-     *     $ wp rrze-migration export all website.zip
-     *
-     * @param array $args
-     * @param array $assoc_args
+     * @return array
      */
-    public function all($args = [], $assoc_args = [])
+    public static function getUserCSVHeaders()
     {
-        global $wpdb;
+        $headers = [
+            // General Info.
+            'ID',
+            'user_login',
+            'user_pass',
+            'user_nicename',
+            'user_email',
+            'user_url',
+            'user_registered',
+            'role',
+            'user_status',
+            'display_name',
 
-        $switched = false;
-
-        if (isset($assoc_args['blog_id'])) {
-            Utils::maybe_switch_to_blog((int) $assoc_args['blog_id']);
-            $switched = true;
-        }
-
-        $verbose = false;
-
-        if (isset($assoc_args['verbose'])) {
-            $verbose = true;
-        }
-
-        $site_data = [
-            'url'             => esc_url(home_url()),
-            'name'            => sanitize_text_field(get_bloginfo('name')),
-            'admin_email'     => sanitize_text_field(get_bloginfo('admin_email')),
-            'site_language'   => sanitize_text_field(get_bloginfo('language')),
-            'db_prefix'       => $wpdb->prefix,
-            'plugins'         => get_plugins(),
-            'blog_plugins'    => get_option('active_plugins'),
-            'network_plugins' => is_multisite() ? get_site_option('active_sitewide_plugins') : [],
-            'blog_id'         => 1
+            // User Meta.
+            'rich_editing',
+            'admin_color',
+            'show_admin_bar_front',
+            'first_name',
+            'last_name',
+            'nickname',
+            'aim',
+            'yim',
+            'jabber',
+            'description',
+            '_application_passwords',
         ];
 
-        if (isset($assoc_args['blog_id'])) {
-            $site_data['blog_id'] = get_current_blog_id();
-        }
-
-        $this->process_args(
-            [
-                0 => 'rrze-migration-' . sanitize_title($site_data['name']) . '.zip',
-            ],
-            $args,
-            [
-                'blog_id'       => false,
-                'tables'        => '',
-                'custom-tables' => '',
-            ],
-            $assoc_args
-        );
-
-        $zip_file = $this->args[0];
-
-        $include_plugins = isset($this->assoc_args['plugins']) ? true : false;
-        $include_themes  = isset($this->assoc_args['themes']) ? true : false;
-        $include_uploads = isset($this->assoc_args['uploads']) ? true : false;
-
-        $users_assoc_args  = [];
-        $tables_assoc_args = [
-            'tables'        => $this->assoc_args['tables'],
-            'custom-tables' => $this->assoc_args['custom-tables'],
-        ];
-
-        if ($this->assoc_args['blog_id']) {
-            $users_assoc_args['blog_id']  = (int) $this->assoc_args['blog_id'];
-            $tables_assoc_args['blog_id'] = (int) $this->assoc_args['blog_id'];
-        }
-
-        /*
-         * Adds a random prefix to temporary file names to ensure uniqueness and also for security reasons.
+        /**
+         * Filters the default set of user headers to be exported/imported.
+         *
+         * @param array
          */
-        $rand = bin2hex(random_bytes(8));
-        $users_file = 'rrze-migration-' . $rand . sanitize_title($site_data['name']) . '.csv';
-        $tables_file = 'rrze-migration-' . $rand . sanitize_title($site_data['name']) . '.sql';
-        $meta_data_file = 'rrze-migration-' . $rand . sanitize_title($site_data['name']) . '.json';
+        $custom_headers = apply_filters('rrze_migration_export_user_headers', []);
 
-        WP_CLI::log(__('Exporting site meta data...', 'rrze-cli'));
-        file_put_contents($meta_data_file, wp_json_encode($site_data));
-
-        WP_CLI::log(__('Exporting users...', 'rrze-cli'));
-        $this->users(array($users_file), $users_assoc_args, $verbose);
-
-        WP_CLI::log(__('Exporting tables', 'rrze-cli'));
-        $this->tables(array($tables_file), $tables_assoc_args, $verbose);
-
-        $zip = null;
-
-        /*
-         * Removing previous $zip_file, if any.
-         */
-        if (file_exists($zip_file)) {
-            unlink($zip_file);
+        if (!empty($custom_headers)) {
+            $headers = array_merge($headers, $custom_headers);
         }
 
-        $files_to_zip = [
-            $users_file     => $users_file,
-            $tables_file    => $tables_file,
-            $meta_data_file => $meta_data_file,
-        ];
-
-        if ($include_plugins) {
-            $files_to_zip['wp-content/plugins'] = WP_PLUGIN_DIR;
-        }
-
-        if ($include_themes) {
-            $theme_dir = get_template_directory();
-            $files_to_zip['wp-content/themes/' . basename($theme_dir)] = $theme_dir;
-            if (get_template_directory() !== get_stylesheet_directory()) {
-                $child_theme_dir = get_stylesheet_directory();
-                $files_to_zip['wp-content/themes/' . basename($child_theme_dir)] = $child_theme_dir;
-            }
-        }
-
-        if ($include_uploads) {
-            $upload_dir = wp_upload_dir();
-            $files_to_zip['wp-content/uploads'] = $upload_dir['basedir'];
-        }
-
-        try {
-            WP_CLI::log(__('Zipping files....', 'rrze-cli'));
-            $zip = Utils::zip($zip_file, $files_to_zip);
-        } catch (\Exception $e) {
-            WP_CLI::warning($e->getMessage());
-        }
-
-        if (file_exists($users_file)) {
-            unlink($users_file);
-        }
-
-        if (file_exists($tables_file)) {
-            unlink($tables_file);
-        }
-
-        if (file_exists($meta_data_file)) {
-            unlink($meta_data_file);
-        }
-
-        if ($zip !== null) {
-            WP_CLI::success(sprintf(__('A zip file named %s has been created', 'rrze-cli'), $zip_file));
-        }
-
-        if ($switched) {
-            Utils::maybe_restore_current_blog();
-        }
+        return $headers;
     }
 }

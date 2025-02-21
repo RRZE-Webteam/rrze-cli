@@ -20,6 +20,188 @@ use WP_CLI;
 class Import extends Command
 {
     /**
+     * Imports a new website from a zip package.
+     * 
+     * This command will perform the search-replace as well as
+     * the necessary updates to make the new website work with a multisite instance.
+     * 
+     * ## OPTIONS
+     *
+     * <inputfile>
+     * : The name of the exported ZIP file.
+     * 
+     * [--new_url=<new_domain>]
+     * : The new hostname of the website into which the ZIP file content is imported.
+     * 
+     * [--mysql-single-transaction]
+     * : Wrap the exported SQL in a single transaction.
+     * 
+     * [--uid_fields=<uid_fields>]
+     * : User meta field.
+     * 
+     * [--verbose]
+     * : Display additional details during command execution.
+     * 
+     * ## EXAMPLES
+     * 
+     *  Imports a website from the compressed file website.zip.
+     *  wp rrze-migration import all website.zip [--new_url=website-url]
+     *
+     * @param array $args
+     * @param array $assoc_args
+     */
+    public function all($args = [], $assoc_args = [])
+    {
+        $this->process_args(
+            [
+                0 => '', // .zip file to import.
+            ],
+            $args,
+            [
+                'new_url'                  => '',
+                'mysql-single-transaction' => false,
+                'uid_fields'               => '',
+            ],
+            $assoc_args
+        );
+
+        $verbose = false;
+
+        if (isset($assoc_args['verbose'])) {
+            $verbose = true;
+        }
+
+        $assoc_args = $this->assoc_args;
+
+        $filename = ABSPATH . $this->args[0];
+
+        if (!Utils::is_zip_file($filename)) {
+            WP_CLI::error(__('The provided file does not appear to be a zip file', 'rrze-cli'));
+        }
+
+        $temp_dir = ABSPATH . 'rrze-migration-' . time() . '/';
+
+        WP_CLI::log(__('Extracting zip package...', 'rrze-cli'));
+
+        // Extract the file to the $temp_dir.
+        Utils::extract($filename, $temp_dir);
+
+        // Looks for required (.json, .csv and .sql) files and for the optional folders
+        // that can live in the zip package (plugins, themes and uploads).
+        $site_meta_data = glob($temp_dir . '*.json');
+        $users          = glob($temp_dir . '*.csv');
+        $sql            = glob($temp_dir . '*.sql');
+        $plugins_folder = glob($temp_dir . 'wp-content/plugins');
+        $themes_folder  = glob($temp_dir . 'wp-content/themes');
+        $uploads_folder = glob($temp_dir . 'wp-content/uploads');
+
+        if (empty($site_meta_data) || empty($users) || empty($sql)) {
+            WP_CLI::error(__("There's something wrong with the zip package, unable to find required files", 'rrze-cli'));
+        }
+
+        $site_meta_data = json_decode(file_get_contents($site_meta_data[0]));
+
+        $old_url = $site_meta_data->url;
+
+        if (!empty($assoc_args['new_url'])) {
+            $site_meta_data->url = $assoc_args['new_url'];
+        }
+
+        if (is_multisite()) {
+            $blog_id = $this->create_new_site($site_meta_data);
+        } else {
+            $blog_id = get_current_blog_id(); // Single site.
+        }
+
+        if (!$blog_id) {
+            WP_CLI::error(__('Could not get blog ID value', 'rrze-cli'));
+        }
+
+        $tables_assoc_args = [
+            'blog_id'          => $blog_id,
+            'original_blog_id' => $site_meta_data->blog_id,
+            'old_prefix'       => $site_meta_data->db_prefix,
+            'new_prefix'       => Utils::get_db_prefix($blog_id),
+        ];
+
+        // If changing URL, then set the proper params to force search-replace in the tables method.
+        if (!empty($assoc_args['new_url'])) {
+            $tables_assoc_args['new_url'] = esc_url($assoc_args['new_url']);
+            $tables_assoc_args['old_url'] = esc_url($old_url);
+        }
+
+        WP_CLI::log(__('Importing tables...', 'rrze-cli'));
+
+        // If the flag --mysql-single-transaction is passed, then the SQL is wrapped with
+        // START TRANSACTION and COMMIT to insert in one single transaction.
+        if ($assoc_args['mysql-single-transaction']) {
+            Utils::addTransaction($sql[0]);
+        }
+
+        $this->tables([$sql[0]], $tables_assoc_args, $verbose);
+
+        $this->delete_transients($site_meta_data);
+
+        $map_file = $temp_dir . '/users_map.json';
+
+        $users_assoc_args = [
+            'map_file' => $map_file,
+            'blog_id'  => $blog_id,
+        ];
+
+        WP_CLI::log(__('Moving files...', 'rrze-cli'));
+
+        if (!empty($plugins_folder)) {
+            $blog_plugins = isset($site_meta_data->blog_plugins) ? (array) $site_meta_data->blog_plugins : false;
+            $network_plugins = isset($site_meta_data->network_plugins) ? array_keys((array) $site_meta_data->network_plugins) : false;
+            $this->move_and_activate_plugins($plugins_folder[0], (array) $site_meta_data->plugins, $blog_plugins, $network_plugins);
+        }
+
+        if (!empty($uploads_folder)) {
+            $this->move_uploads($uploads_folder[0], $blog_id);
+        }
+
+        if (!empty($themes_folder)) {
+            $this->move_themes($themes_folder[0]);
+        }
+
+        WP_CLI::log(__('Importing Users...', 'rrze-cli'));
+
+        $this->users([$users[0]], $users_assoc_args, $verbose);
+
+        if (file_exists($map_file)) {
+            $postsCommand = new Posts();
+
+            $postsCommand->update_author(
+                [$map_file],
+                [
+                    'blog_id' => $blog_id,
+                    'uid_fields' => $assoc_args['uid_fields'],
+                ],
+                $verbose
+            );
+        }
+
+        WP_CLI::log(__('Flushing rewrite rules...', 'rrze-cli'));
+
+        add_action('init', function () use ($blog_id) {
+            // Flush the rewrite rules for the newly created site, just in case.
+            Utils::maybe_switch_to_blog($blog_id);
+            flush_rewrite_rules();
+            Utils::maybe_restore_current_blog();
+        }, 9999);
+
+        WP_CLI::log(__('Removing temporary files....', 'rrze-cli'));
+
+        Utils::delete_folder($temp_dir);
+
+        WP_CLI::success(sprintf(
+            __('All done, your new site is available at %s. Remember to flush the cache.', 'rrze-cli'),
+            esc_url($site_meta_data->url)
+        ));
+    }
+
+    /**
      * Imports all users from a CVS file.
      *
      * This command will create a map file containing the new user_id for each user.
@@ -129,7 +311,7 @@ class Import extends Command
                      * wp_insert_users accepts only the default user meta keys.
                      */
                     $default_user_data = [];
-                    foreach (Export::getCSVHeaders() as $key) {
+                    foreach (Export::getUserCSVHeaders() as $key) {
                         if (isset($user_data[$key])) {
                             $default_user_data[$key] = $user_data[$key];
                         }
@@ -302,11 +484,13 @@ class Import extends Command
         $filename = $this->args[0];
 
         if (empty($filename) || !file_exists($filename)) {
-            WP_CLI::error(__('Invalid input file', 'rrze-cli'));
+            WP_CLI::warning(__('Invalid input file', 'rrze-cli'));
+            return;
         }
 
         if (empty($this->assoc_args['blog_id'])) {
-            WP_CLI::error(__('Please, provide a blog_id ', 'rrze-cli'));
+            WP_CLI::warning(__('Please, provide a blog_id ', 'rrze-cli'));
+            return;
         }
 
         // Replaces the db prefix and saves back the modifications to the sql file.
@@ -314,290 +498,101 @@ class Import extends Command
             !empty($this->assoc_args['new_prefix']) &&
             !$this->replace_db_prefix($filename, $this->assoc_args['old_prefix'], $this->assoc_args['new_prefix'])
         ) {
+            WP_CLI::warning(__('Could not replace the db prefix', 'rrze-cli'));
             return;
         }
 
         $import = Utils::runcommand('db import', [$filename]);
+        if (0 !== $import->return_code) {
+            WP_CLI::warning(__('Could not import the database', 'rrze-cli'));
+            return;
+        }
 
-        if (0 === $import->return_code) {
-            $this->log(__('Database imported', 'rrze-cli'), $verbose);
+        $this->log(__('Database imported', 'rrze-cli'), $verbose);
 
-            // Perform search and replace.
-            if (!empty($this->assoc_args['old_url']) && !empty($this->assoc_args['new_url'])) {
-                $this->log(__('Running search-replace', 'rrze-cli'), $verbose);
+        // Perform search and replace.
+        if (!empty($this->assoc_args['old_url']) && !empty($this->assoc_args['new_url'])) {
+            $this->log(__('Running search-replace', 'rrze-cli'), $verbose);
 
-                $old_url = Utils::parse_url_for_search_replace($this->assoc_args['old_url']);
-                $new_url = Utils::parse_url_for_search_replace($this->assoc_args['new_url']);
+            $old_url = Utils::parse_url_for_search_replace($this->assoc_args['old_url']);
+            $new_url = Utils::parse_url_for_search_replace($this->assoc_args['new_url']);
 
-                // $search_replace = Utils::runcommand('search-replace', [$old_url, $new_url], [], ['url' => $new_url]);
+            // $search_replace = Utils::runcommand('search-replace', [$old_url, $new_url], [], ['url' => $new_url]);
+            $search_replace = WP_CLI::launch_self(
+                'search-replace',
+                [
+                    $old_url,
+                    $new_url,
+                ],
+                ['skip-tables' => 'wp_blogs'],
+                false,
+                false,
+                ['url' => $new_url]
+            );
+
+            if (0 === $search_replace) {
+                $this->log(__('Search and Replace has been successfully executed', 'rrze-cli'), $verbose);
+            } else {
+                WP_CLI::warning(__('Could not run search-replace', 'rrze-cli'));
+                return;
+            }
+
+            $this->log(__('Running Search and Replace for uploads paths', 'rrze-cli'), $verbose);
+
+            $from = $to = 'wp-content/uploads';
+
+            if (isset($this->assoc_args['original_blog_id']) && $this->assoc_args['original_blog_id'] > 1) {
+                $from = 'wp-content/uploads/sites/' . (int) $this->assoc_args['original_blog_id'];
+            }
+
+            if ($this->assoc_args['blog_id'] > 1) {
+                $to = 'wp-content/uploads/sites/' . (int) $this->assoc_args['blog_id'];
+            }
+
+            if ($from && $to) {
+
                 $search_replace = WP_CLI::launch_self(
                     'search-replace',
-                    [
-                        $old_url,
-                        $new_url,
-                    ],
-                    ['skip-tables' => 'wp_blogs'],
+                    [$from, $to],
+                    [],
                     false,
                     false,
                     ['url' => $new_url]
                 );
 
                 if (0 === $search_replace) {
-                    $this->log(__('Search and Replace has been successfully executed', 'rrze-cli'), $verbose);
-                }
-
-                $this->log(__('Running Search and Replace for uploads paths', 'rrze-cli'), $verbose);
-
-                $from = $to = 'wp-content/uploads';
-
-                if (isset($this->assoc_args['original_blog_id']) && $this->assoc_args['original_blog_id'] > 1) {
-                    $from = 'wp-content/uploads/sites/' . (int) $this->assoc_args['original_blog_id'];
-                }
-
-                if ($this->assoc_args['blog_id'] > 1) {
-                    $to = 'wp-content/uploads/sites/' . (int) $this->assoc_args['blog_id'];
-                }
-
-                if ($from && $to) {
-
-                    $search_replace = WP_CLI::launch_self(
-                        'search-replace',
-                        [$from, $to],
-                        [],
-                        false,
-                        false,
-                        ['url' => $new_url]
-                    );
-
-                    if (0 === $search_replace) {
-                        $this->log(sprintf(__('Uploads paths have been successfully updated: %s -> %s', 'rrze-cli'), $from, $to), $verbose);
-                    }
+                    $this->log(sprintf(__('Uploads paths have been successfully updated: %s -> %s', 'rrze-cli'), $from, $to), $verbose);
+                } else {
+                    WP_CLI::warning(__('Could not run search-replace for uploads paths', 'rrze-cli'));
+                    return;
                 }
             }
-
-            Utils::maybe_switch_to_blog((int) $this->assoc_args['blog_id']);
-
-            // Update the new tables to work properly with multisite.
-            $new_wp_roles_option_key = $wpdb->prefix . 'user_roles';
-            $old_wp_roles_option_key = $this->assoc_args['old_prefix'] . 'user_roles';
-
-            // Updating user_roles option key.
-            $wpdb->update(
-                $wpdb->options,
-                [
-                    'option_name' => $new_wp_roles_option_key,
-                ],
-                [
-                    'option_name' => $old_wp_roles_option_key,
-                ],
-                [
-                    '%s',
-                ],
-                [
-                    '%s',
-                ]
-            );
-
-            Utils::maybe_restore_current_blog();
         }
-    }
 
-    /**
-     * Imports a new website from a zip package.
-     * 
-     * This command will perform the search-replace as well as
-     * the necessary updates to make the new website work with a multisite instance.
-     * 
-     * ## OPTIONS
-     *
-     * <inputfile>
-     * : The name of the exported ZIP file.
-     * 
-     * [--blog_id=<blog_id>]
-     * : The ID of the website where the content of the ZIP file will be imported. It is required if the import is done in a multisite instance.
-     * 
-     * [--new_url=<new_domain>]
-     * : The new hostname of the website into which the ZIP file content is imported.
-     * 
-     * [--mysql-single-transaction]
-     * : Wrap the exported SQL in a single transaction.
-     * 
-     * [--uid_fields=<uid_fields>]
-     * : User meta field.
-     * 
-     * [--verbose]
-     * : Display additional details during command execution.
-     * 
-     * ## EXAMPLES
-     * 
-     *     # Imports a website from the compressed file website.zip.
-     *     $ wp rrze-migration import all website.zip
-     *
-     * @param array $args
-     * @param array $assoc_args
-     */
-    public function all($args = [], $assoc_args = [])
-    {
-        $this->process_args(
-            [],
-            $args,
+        Utils::maybe_switch_to_blog((int) $this->assoc_args['blog_id']);
+
+        // Update the new tables to work properly with multisite.
+        $new_wp_roles_option_key = $wpdb->prefix . 'user_roles';
+        $old_wp_roles_option_key = $this->assoc_args['old_prefix'] . 'user_roles';
+
+        // Updating user_roles option key.
+        $wpdb->update(
+            $wpdb->options,
             [
-                'blog_id'                  => '',
-                'new_url'                  => '',
-                'mysql-single-transaction' => false,
-                'uid_fields'               => '',
+                'option_name' => $new_wp_roles_option_key,
             ],
-            $assoc_args
+            [
+                'option_name' => $old_wp_roles_option_key,
+            ],
+            [
+                '%s',
+            ],
+            [
+                '%s',
+            ]
         );
 
-        $is_multisite = is_multisite();
-
-        $verbose = false;
-
-        if (isset($assoc_args['verbose'])) {
-            $verbose = true;
-        }
-
-        $assoc_args = $this->assoc_args;
-
-        $filename = $this->args[0];
-
-        if (!Utils::is_zip_file($filename)) {
-            WP_CLI::error(__('The provided file does not appear to be a zip file', 'rrze-cli'));
-        }
-
-        $temp_dir = 'rrze-migration-' . time() . '/';
-
-        WP_CLI::log(__('Extracting zip package...', 'rrze-cli'));
-
-        /*
-         * Extract the file to the $temp_dir.
-         */
-        Utils::extract($filename, $temp_dir);
-
-        /*
-         * Looks for required (.json, .csv and .sql) files and for the optional folders
-         * that can live in the zip package (plugins, themes and uploads).
-         */
-        $site_meta_data = glob($temp_dir . '*.json');
-        $users          = glob($temp_dir . '*.csv');
-        $sql            = glob($temp_dir . '*.sql');
-        $plugins_folder = glob($temp_dir . 'wp-content/plugins');
-        $themes_folder  = glob($temp_dir . 'wp-content/themes');
-        $uploads_folder = glob($temp_dir . 'wp-content/uploads');
-
-        if (empty($site_meta_data) || empty($users) || empty($sql)) {
-            WP_CLI::error(__("There's something wrong with the zip package, unable to find required files", 'rrze-cli'));
-        }
-
-        $site_meta_data = json_decode(file_get_contents($site_meta_data[0]));
-
-        $old_url = $site_meta_data->url;
-
-        if (!empty($assoc_args['new_url'])) {
-            $site_meta_data->url = $assoc_args['new_url'];
-        }
-
-        if (empty($assoc_args['blog_id']) && $is_multisite) {
-            $blog_id = $this->create_new_site($site_meta_data);
-        } else if ($is_multisite) {
-            $blog_id = (int) $assoc_args['blog_id'];
-        } else {
-            $blog_id = 1;
-        }
-
-        if (!$blog_id) {
-            WP_CLI::error(__('Unable to create new site', 'rrze-cli'));
-        }
-
-        $tables_assoc_args = [
-            'blog_id'          => $blog_id,
-            'original_blog_id' => $site_meta_data->blog_id,
-            'old_prefix'       => $site_meta_data->db_prefix,
-            'new_prefix'       => Utils::get_db_prefix($blog_id),
-        ];
-
-        /*
-         * If changing URL, then set the proper params to force search-replace in the tables method.
-         */
-        if (!empty($assoc_args['new_url'])) {
-            $tables_assoc_args['new_url'] = esc_url($assoc_args['new_url']);
-            $tables_assoc_args['old_url'] = esc_url($old_url);
-        }
-
-        WP_CLI::log(__('Importing tables...', 'rrze-cli'));
-
-        /*
-         * If the flag --mysql-single-transaction is passed, then the SQL is wrapped with
-         * START TRANSACTION and COMMIT to insert in one single transaction.
-         */
-        if ($assoc_args['mysql-single-transaction']) {
-            Utils::addTransaction($sql[0]);
-        }
-
-        $this->tables([$sql[0]], $tables_assoc_args, $verbose);
-
-        $this->delete_transients($site_meta_data);
-
-        $map_file = $temp_dir . '/users_map.json';
-
-        $users_assoc_args = [
-            'map_file' => $map_file,
-            'blog_id'  => $blog_id,
-        ];
-
-        WP_CLI::log(__('Moving files...', 'rrze-cli'));
-
-        if (!empty($plugins_folder)) {
-            $blog_plugins = isset($site_meta_data->blog_plugins) ? (array) $site_meta_data->blog_plugins : false;
-            $network_plugins = isset($site_meta_data->network_plugins) ? array_keys((array) $site_meta_data->network_plugins) : false;
-            $this->move_and_activate_plugins($plugins_folder[0], (array) $site_meta_data->plugins, $blog_plugins, $network_plugins);
-        }
-
-        if (!empty($uploads_folder)) {
-            $this->move_uploads($uploads_folder[0], $blog_id);
-        }
-
-        if (!empty($themes_folder)) {
-            $this->move_themes($themes_folder[0]);
-        }
-
-        WP_CLI::log(__('Importing Users...', 'rrze-cli'));
-
-        $this->users([$users[0]], $users_assoc_args, $verbose);
-
-        if (file_exists($map_file)) {
-            $postsCommand = new Posts();
-
-            $postsCommand->update_author(
-                [$map_file],
-                [
-                    'blog_id' => $blog_id,
-                    'uid_fields' => $assoc_args['uid_fields'],
-                ],
-                $verbose
-            );
-        }
-
-        WP_CLI::log(__('Flushing rewrite rules...', 'rrze-cli'));
-
-        add_action('init', function () use ($blog_id) {
-            /*
-             * Flush the rewrite rules for the newly created site, just in case.
-             */
-            Utils::maybe_switch_to_blog($blog_id);
-            flush_rewrite_rules();
-            Utils::maybe_restore_current_blog();
-        }, 9999);
-
-        WP_CLI::log(__('Removing temporary files....', 'rrze-cli'));
-
-        Utils::delete_folder($temp_dir);
-
-        WP_CLI::success(sprintf(
-            __('All done, your new site is available at %s. Remember to flush the cache (memcache, redis etc).', 'rrze-cli'),
-            esc_url($site_meta_data->url)
-        ));
+        Utils::maybe_restore_current_blog();
     }
 
     /**
@@ -609,32 +604,35 @@ class Import extends Command
      */
     private function move_and_activate_plugins($plugins_dir, $plugins, $blog_plugins, $network_plugins)
     {
-        if (file_exists($plugins_dir)) {
-            WP_CLI::log(__('Moving Plugins...', 'rrze-cli'));
-            $installed_plugins = WP_PLUGIN_DIR;
-            $check_plugins        = false !== $blog_plugins && false !== $network_plugins;
-            foreach ($plugins as $plugin_name => $plugin) {
-                $plugin_folder = dirname($plugin_name);
-                $fullPluginPath = $plugins_dir . '/' . $plugin_folder;
-                if (
-                    $check_plugins &&  !in_array($plugin_name, $blog_plugins, true) &&
-                    !in_array($plugin_name, $network_plugins, true)
-                ) {
-                    continue;
-                }
+        if (!file_exists($plugins_dir)) {
+            WP_CLI::warning(__('Could not find the plugins folder', 'rrze-cli'));
+            return;
+        }
 
-                if (!file_exists($installed_plugins . '/' . $plugin_folder)) {
-                    WP_CLI::log(sprintf(__('Moving %s to plugins folder'), $plugin_name));
-                    rename($fullPluginPath, $installed_plugins . '/' . $plugin_folder);
-                }
+        WP_CLI::log(__('Moving Plugins...', 'rrze-cli'));
+        $installed_plugins = WP_PLUGIN_DIR;
+        $check_plugins = false !== $blog_plugins && false !== $network_plugins;
+        foreach ($plugins as $plugin_name => $plugin) {
+            $plugin_folder = dirname($plugin_name);
+            $fullPluginPath = $plugins_dir . '/' . $plugin_folder;
+            if (
+                $check_plugins &&  !in_array($plugin_name, $blog_plugins, true) &&
+                !in_array($plugin_name, $network_plugins, true)
+            ) {
+                continue;
+            }
 
-                if ($check_plugins && in_array($plugin_name, $blog_plugins, true)) {
-                    WP_CLI::log(sprintf(__('Activating plugin: %s '), $plugin_name));
-                    activate_plugin($installed_plugins . '/' . $plugin_name);
-                } else if ($check_plugins && in_array($plugin_name, $network_plugins, true)) {
-                    WP_CLI::log(sprintf(__('Activating plugin network-wide: %s '), $plugin_name));
-                    activate_plugin($installed_plugins . '/' . $plugin_name, '', true);
-                }
+            if (!file_exists($installed_plugins . '/' . $plugin_folder)) {
+                WP_CLI::log(sprintf(__('Moving %s to plugins folder'), $plugin_name));
+                rename($fullPluginPath, $installed_plugins . '/' . $plugin_folder);
+            }
+
+            if ($check_plugins && in_array($plugin_name, $blog_plugins, true)) {
+                WP_CLI::log(sprintf(__('Activating plugin: %s '), $plugin_name));
+                activate_plugin($installed_plugins . '/' . $plugin_name);
+            } else if ($check_plugins && in_array($plugin_name, $network_plugins, true)) {
+                WP_CLI::log(sprintf(__('Activating plugin network-wide: %s '), $plugin_name));
+                activate_plugin($installed_plugins . '/' . $plugin_name, '', true);
             }
         }
     }
@@ -647,13 +645,16 @@ class Import extends Command
      */
     private function move_uploads($uploads_dir, $blog_id)
     {
-        if (file_exists($uploads_dir)) {
-            WP_CLI::log(__('Moving Uploads...', 'rrze-cli'));
-            Utils::maybe_switch_to_blog($blog_id);
-            $dest_uploads_dir = wp_upload_dir();
-            Utils::maybe_restore_current_blog();
-            Utils::move_folder($uploads_dir, $dest_uploads_dir['basedir']);
+        if (!is_dir($uploads_dir)) {
+            WP_CLI::warning(__('Could not find the uploads folder', 'rrze-cli'));
+            return;
         }
+
+        WP_CLI::log(__('Moving uploads...', 'rrze-cli'));
+        Utils::maybe_switch_to_blog($blog_id);
+        $dest_uploads_dir = wp_upload_dir();
+        Utils::maybe_restore_current_blog();
+        Utils::move_folder($uploads_dir, $dest_uploads_dir['basedir']);
     }
 
     /**
@@ -663,21 +664,24 @@ class Import extends Command
      */
     private function move_themes($themes_dir)
     {
-        if (file_exists($themes_dir)) {
-            WP_CLI::log(__('Moving Themes...', 'rrze-cli'));
-            $themes = new \DirectoryIterator($themes_dir);
-            $installed_themes = get_theme_root();
+        if (!is_dir($themes_dir)) {
+            WP_CLI::warning(__('Could not find the themes folder', 'rrze-cli'));
+            return;
+        }
 
-            foreach ($themes as $theme) {
-                if ($theme->isDir()) {
-                    $fullPluginPath = $themes_dir . '/' . $theme->getFilename();
+        WP_CLI::log(__('Moving Themes...', 'rrze-cli'));
+        $themes = new \DirectoryIterator($themes_dir);
+        $installed_themes = get_theme_root();
 
-                    if (!file_exists($installed_themes . '/' . $theme->getFilename())) {
-                        WP_CLI::log(sprintf(__('Moving %s to themes folder'), $theme->getFilename()));
-                        rename($fullPluginPath, $installed_themes . '/' . $theme->getFilename());
+        foreach ($themes as $theme) {
+            if ($theme->isDir()) {
+                $fullPluginPath = $themes_dir . '/' . $theme->getFilename();
 
-                        Utils::runcommand('theme enable', [$theme->getFilename()]);
-                    }
+                if (!file_exists($installed_themes . '/' . $theme->getFilename())) {
+                    WP_CLI::log(sprintf(__('Moving %s to themes folder'), $theme->getFilename()));
+                    rename($fullPluginPath, $installed_themes . '/' . $theme->getFilename());
+
+                    Utils::runcommand('theme enable', [$theme->getFilename()]);
                 }
             }
         }
@@ -687,14 +691,15 @@ class Import extends Command
      * Creates a new site within multisite.
      *
      * @param object $meta_data
-     * @return bool|false|int
+     * @return false|int
      */
     private function create_new_site($meta_data)
     {
         $parsed_url = parse_url(esc_url($meta_data->url));
+
         $site_id = get_main_network_id();
 
-        $parsed_url['path'] = isset($parsed_url['path']) ? $parsed_url['path'] : '/';
+        $parsed_url['path'] = $parsed_url['path'] ?? '/';
 
         if (domain_exists($parsed_url['host'], $parsed_url['path'], $site_id)) {
             return false;
@@ -706,7 +711,7 @@ class Import extends Command
             'network_id' => $site_id
         ]);
 
-        if (!$blog_id) {
+        if (is_wp_error($blog_id)) {
             return false;
         }
 
