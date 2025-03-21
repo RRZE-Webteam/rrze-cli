@@ -59,6 +59,7 @@ class Stats extends Command
         $sites = get_sites([
             'archived' => 0,
             'deleted' => 0,
+            'number' => 10000,
         ]);
 
         $count = 0;
