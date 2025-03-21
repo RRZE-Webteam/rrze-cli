@@ -7,6 +7,9 @@ defined('ABSPATH') || exit;
 use WP_CLI_Command;
 
 /**
+ * Class Info
+ * Displays General Info about RRZE-CLI
+ *
  * @package RRZE\CLI
  */
 class Info extends WP_CLI_Command
