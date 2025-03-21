@@ -76,7 +76,7 @@ class Stats extends Command
                 // Perform actions on the site
                 $siteUrl = get_site_url();
                 if ($verbose) {
-                    WP_CLI::log('Processing site: ' . $siteUrl);
+                    WP_CLI::log(__('Processing site:', 'rrze-cli') . ' ' . $siteUrl);
                 }
 
                 if (!empty($optionValue->network_connections) || !empty($optionValue->parent_site)) {
@@ -95,18 +95,24 @@ class Stats extends Command
         }
 
         // Log the count of sites processed
-        WP_CLI::log("Total sites processed: $count");
+        WP_CLI::log(
+            sprintf(
+                /* translators: %s: The number of sites processed. */
+                __('Total sites processed: %s', 'rrze-cli'),
+                $count
+            )
+        );
 
         // Log the linked sites URLs
         if (!empty($linkedUrls)) {
             sort($linkedUrls);
-            WP_CLI::log("Linked sites URLs: " . implode(PHP_EOL, $linkedUrls));
+            WP_CLI::log(__('Linked sites URLs:', 'rrze-cli') . PHP_EOL . implode(PHP_EOL, $linkedUrls));
         }
 
         // Log the not linked sites URLs
         if (!empty($notLinkedUrls)) {
             sort($notLinkedUrls);
-            WP_CLI::log("Not linked sites URLs: " . implode(PHP_EOL, $notLinkedUrls));
+            WP_CLI::log(__('Not linked sites URLs:', 'rrze-cli') . PHP_EOL . implode(PHP_EOL, $notLinkedUrls));
         }
     }
 }
