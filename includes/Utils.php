@@ -8,6 +8,12 @@ use WP_CLI;
 use PhpZip\ZipFile;
 use PhpZip\Exception\ZipException;
 
+/**
+ * Class Utils
+ * Utility functions for the RRZE-CLI plugin.
+ *
+ * @package RRZE\CLI
+ */
 class Utils
 {
     /**
