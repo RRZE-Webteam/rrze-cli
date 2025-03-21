@@ -97,11 +97,14 @@ class Stats extends Command
         // Log the count of sites processed
         WP_CLI::log("Total sites processed: $count");
 
-        // Log the linked and not linked sites URLs
+        // Log the linked sites URLs
         if (!empty($linkedUrls)) {
             sort($linkedUrls);
             WP_CLI::log("Linked sites URLs: " . implode(PHP_EOL, $linkedUrls));
-        } elseif (!empty($notLinkedUrls)) {
+        }
+
+        // Log the not linked sites URLs
+        if (!empty($notLinkedUrls)) {
             sort($notLinkedUrls);
             WP_CLI::log("Not linked sites URLs: " . implode(PHP_EOL, $notLinkedUrls));
         }
