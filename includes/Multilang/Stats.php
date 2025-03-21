@@ -62,7 +62,8 @@ class Stats extends Command
         ]);
 
         $count = 0;
-        $urls = [];
+        $linkedUrls = []; // network module activated and linked to another website
+        $notLinkedUrls = []; // network module activated but no link to another website
 
         // Loop through each site
         foreach ($sites as $site) {
@@ -78,19 +79,31 @@ class Stats extends Command
                     WP_CLI::log('Processing site: ' . $siteUrl);
                 }
 
-                // Increment count and save the URL
-                $count++;
-                $urls[] = $siteUrl;
+                if (!empty($optionValue->network_connections) || !empty($optionValue->parent_site)) {
+                    // Increment count and save the URL
+                    $count++;
+                    $linkedUrls[] = $siteUrl;
+                } else {
+                    // Increment count and save the URL
+                    $count++;
+                    $notLinkedUrls[] = $siteUrl;
+                }
             }
 
             // Restore the current site
             restore_current_blog();
         }
 
-        // Log the count and URLs
+        // Log the count of sites processed
         WP_CLI::log("Total sites processed: $count");
-        if ($count > 0) {
-            WP_CLI::log("Processed site URLs: " . implode(PHP_EOL, $urls));
+
+        // Log the linked and not linked sites URLs
+        if (!empty($linkedUrls)) {
+            sort($linkedUrls);
+            WP_CLI::log("Linked sites URLs: " . implode(PHP_EOL, $linkedUrls));
+        } elseif (!empty($notLinkedUrls)) {
+            sort($notLinkedUrls);
+            WP_CLI::log("Not linked sites URLs: " . implode(PHP_EOL, $notLinkedUrls));
         }
     }
 }
