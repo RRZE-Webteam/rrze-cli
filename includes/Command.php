@@ -88,7 +88,15 @@ abstract class Command extends WP_CLI_Command
 
             if (0 === $counter % $query_args['posts_per_page']) {
                 Utils::delete_object_cache();
-                $this->log(sprintf(__('Posts Updated: %d/%d', 'rrze-cli'), $counter, $found_posts), true);
+                $this->log(
+                    sprintf(
+                        /* translators: %d = number of posts updated, %d = total number of posts */
+                        __('Posts Updated: %1$d/%2$d', 'rrze-cli'),
+                        $counter,
+                        $found_posts
+                    ),
+                    true
+                );
                 $query_args['offset'] += $query_args['posts_per_page'];
                 $query = new \WP_Query($query_args);
             }
@@ -96,10 +104,14 @@ abstract class Command extends WP_CLI_Command
 
         wp_reset_postdata();
 
-        $this->success(sprintf(
-            __('%d posts were updated', 'rrze-cli'),
-            $counter
-        ), $verbose);
+        $this->success(
+            sprintf(
+                /* translators: %d = number of posts updated */
+                __('%d posts were updated', 'rrze-cli'),
+                $counter
+            ),
+            $verbose
+        );
     }
 
     /**
