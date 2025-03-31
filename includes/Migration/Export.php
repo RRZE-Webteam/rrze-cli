@@ -162,7 +162,13 @@ class Export extends Command
         }
 
         if (file_exists($zip_file)) {
-            WP_CLI::success(sprintf(__('A zip file named %s has been created', 'rrze-cli'), $zip_file));
+            WP_CLI::success(
+                sprintf(
+                    /* translators: %s: zip file name */
+                    __('A zip file named %s has been created', 'rrze-cli'),
+                    $zip_file
+                )
+            );
         } else {
             WP_CLI::warning(__('Something went wrong while trying to create the zip file', 'rrze-cli'));
         }
@@ -462,10 +468,14 @@ class Export extends Command
 
         fclose($file_handler);
 
-        $this->success(sprintf(
-            __('%d users have been exported', 'rrze-cli'),
-            absint($count)
-        ), $verbose);
+        $this->success(
+            sprintf(
+                /* translators: %d = number of users exported */
+                __('%d users have been exported', 'rrze-cli'),
+                absint($count)
+            ),
+            $verbose
+        );
     }
 
     /**
