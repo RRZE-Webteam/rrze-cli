@@ -349,7 +349,7 @@ class Utils
             'exit_error' => false, // Prevent WP-CLI from stopping execution on error
         ];
 
-        error_log(sprintf('%s %s', $command, $params));
+        // error_log(sprintf('%s %s', $command, $params));
         return WP_CLI::runcommand(sprintf('%s %s', $command, $params), $options);
     }
 
