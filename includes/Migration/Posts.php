@@ -106,12 +106,14 @@ class Posts extends Command
                         );
 
                         $this->log(sprintf(
-                            __('Updated post_author for "%s" (ID #%d)', 'rrze-cli'),
+                            /* translators: %1$s: post title, %2$d: post ID */
+                            __('Updated post_author for "%1$s" (ID #%2$d)', 'rrze-cli'),
                             $result->post_title,
                             absint($result->ID)
                         ), $verbose);
                     } else {
                         $this->log(sprintf(
+                            /* translators: %d: post ID */
                             __('#%d New user ID equals to the old user ID', 'rrze-cli'),
                             $result->ID
                         ), $verbose);
@@ -119,6 +121,7 @@ class Posts extends Command
                     }
                 } else {
                     $this->log(sprintf(
+                        /* translators: %d: post ID */
                         __("#%d New user ID not found or it is already been updated", 'rrze-cli'),
                         absint($result->ID)
                     ), $verbose);
@@ -143,7 +146,8 @@ class Posts extends Command
                         update_post_meta((int) $result->ID, $f, $new_user);
 
                         $this->log(sprintf(
-                            __('Updated %s for "%s" (ID #%d)', 'rrze-cli'),
+                            /* translators: %1$s: field name, %2$s: post title, %3$d: post ID */
+                            __('Updated %1$s for "%2$s" (ID #%d)', 'rrze-cli'),
                             $f,
                             $result->post_title,
                             absint($result->ID)
@@ -155,7 +159,8 @@ class Posts extends Command
 
         if (!empty($author_not_found)) {
             $this->warning(sprintf(
-                __('%d records failed to update its post_author: %s', 'rrze-cli'),
+                /* translators: %1$d: number of records, %2$s: list of IDs */
+                __('%1$d records failed to update its post_author: %2$s', 'rrze-cli'),
                 count($author_not_found),
                 implode(',', $author_not_found)
             ), $verbose);
@@ -163,6 +168,7 @@ class Posts extends Command
 
         if (!empty($equals_id)) {
             $this->warning(sprintf(
+                /* translators: %s: list of IDs */
                 __('The following records have the new ID equal to the old ID: %s', 'rrze-cli'),
                 implode(',', $equals_id)
             ), $verbose);

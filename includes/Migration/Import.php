@@ -195,10 +195,13 @@ class Import extends Command
 
         Utils::delete_folder($temp_dir);
 
-        WP_CLI::success(sprintf(
-            __('All done, your new site is available at %s. Remember to flush the cache.', 'rrze-cli'),
-            esc_url($site_meta_data->url)
-        ));
+        WP_CLI::success(
+            sprintf(
+                /* translators: %s: url */
+                __('All done, your new site is available at %s. Remember to flush the cache.', 'rrze-cli'),
+                esc_url($site_meta_data->url)
+            )
+        );
     }
 
     /**
@@ -276,7 +279,14 @@ class Import extends Command
         $existing_users = 0;
 
         if (false !== $input_file_handler) {
-            $this->line(sprintf(__('Parsing %s...', 'rrze-cli'), $filename), $verbose);
+            $this->line(
+                sprintf(
+                    /* translators: %s: filename */
+                    __('Parsing %s...', 'rrze-cli'),
+                    $filename
+                ),
+                $verbose
+            );
 
             $line = 0;
 
@@ -370,18 +380,26 @@ class Import extends Command
                             Utils::light_add_user_to_blog($this->assoc_args['blog_id'], $new_id, $user_data['role']);
                         }
                     } else {
-                        $this->warning(sprintf(
-                            __('An error has occurred when inserting %s: %s.', 'rrze-cli'),
-                            $user_data['user_login'],
-                            implode(', ', $new_id->get_error_messages())
-                        ), $verbose);
+                        $this->warning(
+                            sprintf(
+                                /* translators: %1$s: user_login, %2$s: error messages */
+                                __('An error has occurred when inserting %1$s: %2$s.', 'rrze-cli'),
+                                $user_data['user_login'],
+                                implode(', ', $new_id->get_error_messages())
+                            ),
+                            $verbose
+                        );
                     }
                 } else {
-                    $this->warning(sprintf(
-                        __('%s exists, using his ID (%d)...', 'rrze-cli'),
-                        $user_data['user_login'],
-                        $user_exists
-                    ), $verbose);
+                    $this->warning(
+                        sprintf(
+                            /* translators: %1$s: user_login, %2$d: user_id */
+                            __('%1$s exists, using his ID (%2$d)...', 'rrze-cli'),
+                            $user_data['user_login'],
+                            $user_exists
+                        ),
+                        $verbose
+                    );
 
                     $existing_users++;
                     $ids_maps[$old_id] = $user_exists;
@@ -405,19 +423,28 @@ class Import extends Command
                 fwrite($output_file_handler, json_encode($ids_maps));
                 fclose($output_file_handler);
 
-                $this->success(sprintf(
-                    __('A map file has been created: %s', 'rrze-cli'),
-                    $this->assoc_args['map_file']
-                ), $verbose);
+                $this->success(
+                    sprintf(
+                        /* translators: %s: filename */
+                        __('A map file has been created: %s', 'rrze-cli'),
+                        $this->assoc_args['map_file']
+                    ),
+                    $verbose
+                );
             }
 
-            $this->success(sprintf(
-                __('%d users have been imported and %d users already existed', 'rrze-cli'),
-                absint($count),
-                absint($existing_users)
-            ), $verbose);
+            $this->success(
+                sprintf(
+                    /* translators: %1$d: number of users imported, %2$d: number of existing users */
+                    __('%1$d users have been imported and %2$d users already existed', 'rrze-cli'),
+                    absint($count),
+                    absint($existing_users)
+                ),
+                $verbose
+            );
         } else {
             WP_CLI::error(sprintf(
+                /* translators: %s: filename */
                 __('Can not read the file %s', 'rrze-cli'),
                 $filename
             ));
@@ -561,7 +588,15 @@ class Import extends Command
                 );
 
                 if (0 === $search_replace) {
-                    $this->log(sprintf(__('Uploads paths have been successfully updated: %s -> %s', 'rrze-cli'), $from, $to), $verbose);
+                    $this->log(
+                        sprintf(
+                            /* translators: %1$s: from, %2$s: to */
+                            __('Uploads paths have been successfully updated: %1$s -> %2$s', 'rrze-cli'),
+                            $from,
+                            $to
+                        ),
+                        $verbose
+                    );
                 } else {
                     WP_CLI::warning(__('Could not run search-replace for uploads paths', 'rrze-cli'));
                     return;

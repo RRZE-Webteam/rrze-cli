@@ -2,14 +2,14 @@
 # This file is distributed under the GNU General Public License v2.
 msgid ""
 msgstr ""
-"Project-Id-Version: RRZE CLI 1.0.2\n"
+"Project-Id-Version: RRZE CLI 1.2.1\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/rrze-cli\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2025-02-21T16:07:49+00:00\n"
+"POT-Creation-Date: 2025-03-31T15:43:50+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.11.0\n"
 "X-Domain: rrze-cli\n"
@@ -43,20 +43,23 @@ msgstr ""
 msgid "The provided callback is invalid"
 msgstr ""
 
-#: includes/Command.php:91
-msgid "Posts Updated: %d/%d"
+#. translators: %d = number of posts updated, %d = total number of posts
+#: includes/Command.php:94
+msgid "Posts Updated: %1$d/%2$d"
 msgstr ""
 
-#: includes/Command.php:100
+#. translators: %d = number of posts updated
+#: includes/Command.php:110
 msgid "%d posts were updated"
 msgstr ""
 
-#: includes/Main.php:29
+#: includes/Main.php:35
 msgid "Unable to determine the current working directory."
 msgstr ""
 
-#: includes/Main.php:37
+#: includes/Main.php:43
 #: includes/Multilang/Migration.php:49
+#: includes/Multilang/Stats.php:39
 msgid "This command must be run from the main directory of a WordPress installation."
 msgstr ""
 
@@ -88,39 +91,41 @@ msgstr ""
 msgid "Zipping files..."
 msgstr ""
 
-#: includes/Migration/Export.php:165
+#. translators: %s: zip file name
+#: includes/Migration/Export.php:168
 msgid "A zip file named %s has been created"
 msgstr ""
 
-#: includes/Migration/Export.php:167
+#: includes/Migration/Export.php:173
 msgid "Something went wrong while trying to create the zip file"
 msgstr ""
 
-#: includes/Migration/Export.php:212
+#: includes/Migration/Export.php:218
 msgid "Please provide a filename for the exported SQL file"
 msgstr ""
 
-#: includes/Migration/Export.php:266
+#: includes/Migration/Export.php:272
 msgid "The export is now complete"
 msgstr ""
 
-#: includes/Migration/Export.php:268
+#: includes/Migration/Export.php:274
 msgid "Something went wrong while trying to export the database"
 msgstr ""
 
-#: includes/Migration/Export.php:271
+#: includes/Migration/Export.php:277
 msgid "Unable to get the list of tables to be exported"
 msgstr ""
 
-#: includes/Migration/Export.php:316
+#: includes/Migration/Export.php:322
 msgid "Impossible to create the file"
 msgstr ""
 
-#: includes/Migration/Export.php:445
+#: includes/Migration/Export.php:451
 msgid "The headers and data length are not matching"
 msgstr ""
 
-#: includes/Migration/Export.php:466
+#. translators: %d = number of users exported
+#: includes/Migration/Export.php:474
 msgid "%d users have been exported"
 msgstr ""
 
@@ -160,113 +165,121 @@ msgstr ""
 msgid "Removing temporary files...."
 msgstr ""
 
-#: includes/Migration/Import.php:199
+#. translators: %s: url
+#: includes/Migration/Import.php:201
 msgid "All done, your new site is available at %s. Remember to flush the cache."
 msgstr ""
 
-#: includes/Migration/Import.php:260
-#: includes/Migration/Import.php:487
+#: includes/Migration/Import.php:263
+#: includes/Migration/Import.php:514
 #: includes/Migration/Posts.php:69
 msgid "Invalid input file"
 msgstr ""
 
-#: includes/Migration/Import.php:279
+#. translators: %s: filename
+#: includes/Migration/Import.php:285
 msgid "Parsing %s..."
 msgstr ""
 
-#: includes/Migration/Import.php:374
-msgid "An error has occurred when inserting %s: %s."
+#. translators: %1$s: user_login, %2$s: error messages
+#: includes/Migration/Import.php:386
+msgid "An error has occurred when inserting %1$s: %2$s."
 msgstr ""
 
-#: includes/Migration/Import.php:381
-msgid "%s exists, using his ID (%d)..."
+#. translators: %1$s: user_login, %2$d: user_id
+#: includes/Migration/Import.php:397
+msgid "%1$s exists, using his ID (%2$d)..."
 msgstr ""
 
-#: includes/Migration/Import.php:409
+#. translators: %s: filename
+#: includes/Migration/Import.php:429
 msgid "A map file has been created: %s"
 msgstr ""
 
-#: includes/Migration/Import.php:415
-msgid "%d users have been imported and %d users already existed"
+#. translators: %1$d: number of users imported, %2$d: number of existing users
+#: includes/Migration/Import.php:439
+msgid "%1$d users have been imported and %2$d users already existed"
 msgstr ""
 
-#: includes/Migration/Import.php:421
+#. translators: %s: filename
+#: includes/Migration/Import.php:448
 msgid "Can not read the file %s"
 msgstr ""
 
-#: includes/Migration/Import.php:492
+#: includes/Migration/Import.php:519
 msgid "Please, provide a blog_id "
 msgstr ""
 
-#: includes/Migration/Import.php:501
+#: includes/Migration/Import.php:528
 msgid "Could not replace the db prefix"
 msgstr ""
 
-#: includes/Migration/Import.php:507
+#: includes/Migration/Import.php:534
 msgid "Could not import the database"
 msgstr ""
 
-#: includes/Migration/Import.php:511
+#: includes/Migration/Import.php:538
 msgid "Database imported"
 msgstr ""
 
-#: includes/Migration/Import.php:515
+#: includes/Migration/Import.php:542
 msgid "Running search-replace"
 msgstr ""
 
-#: includes/Migration/Import.php:534
+#: includes/Migration/Import.php:561
 msgid "Search and Replace has been successfully executed"
 msgstr ""
 
-#: includes/Migration/Import.php:536
+#: includes/Migration/Import.php:563
 msgid "Could not run search-replace"
 msgstr ""
 
-#: includes/Migration/Import.php:540
+#: includes/Migration/Import.php:567
 msgid "Running Search and Replace for uploads paths"
 msgstr ""
 
-#: includes/Migration/Import.php:564
-msgid "Uploads paths have been successfully updated: %s -> %s"
+#. translators: %1$s: from, %2$s: to
+#: includes/Migration/Import.php:594
+msgid "Uploads paths have been successfully updated: %1$s -> %2$s"
 msgstr ""
 
-#: includes/Migration/Import.php:566
+#: includes/Migration/Import.php:601
 msgid "Could not run search-replace for uploads paths"
 msgstr ""
 
-#: includes/Migration/Import.php:608
+#: includes/Migration/Import.php:643
 msgid "Could not find the plugins folder"
 msgstr ""
 
-#: includes/Migration/Import.php:612
+#: includes/Migration/Import.php:647
 msgid "Moving Plugins..."
 msgstr ""
 
-#: includes/Migration/Import.php:649
+#: includes/Migration/Import.php:684
 msgid "Could not find the uploads folder"
 msgstr ""
 
-#: includes/Migration/Import.php:653
+#: includes/Migration/Import.php:688
 msgid "Moving uploads..."
 msgstr ""
 
-#: includes/Migration/Import.php:668
+#: includes/Migration/Import.php:703
 msgid "Could not find the themes folder"
 msgstr ""
 
-#: includes/Migration/Import.php:672
+#: includes/Migration/Import.php:707
 msgid "Moving Themes..."
 msgstr ""
 
-#: includes/Migration/Import.php:754
+#: includes/Migration/Import.php:789
 msgid "It was not possible to do a search and replace of the SQL file."
 msgstr ""
 
-#: includes/Migration/Import.php:758
+#: includes/Migration/Import.php:793
 msgid "Could not overwrite SQL file."
 msgstr ""
 
-#: includes/Migration/Import.php:773
+#: includes/Migration/Import.php:808
 msgid "Deleting transients..."
 msgstr ""
 
@@ -278,34 +291,65 @@ msgstr ""
 msgid "Updating posts authors"
 msgstr ""
 
-#: includes/Migration/Posts.php:109
-msgid "Updated post_author for \"%s\" (ID #%d)"
+#. translators: %1$s: post title, %2$d: post ID
+#: includes/Migration/Posts.php:110
+msgid "Updated post_author for \"%1$s\" (ID #%2$d)"
 msgstr ""
 
-#: includes/Migration/Posts.php:115
+#. translators: %d: post ID
+#: includes/Migration/Posts.php:117
 msgid "#%d New user ID equals to the old user ID"
 msgstr ""
 
-#: includes/Migration/Posts.php:122
+#. translators: %d: post ID
+#: includes/Migration/Posts.php:125
 msgid "#%d New user ID not found or it is already been updated"
 msgstr ""
 
-#: includes/Migration/Posts.php:146
-msgid "Updated %s for \"%s\" (ID #%d)"
+#. translators: %1$s: field name, %2$s: post title, %3$d: post ID
+#: includes/Migration/Posts.php:150
+msgid "Updated %1$s for \"%2$s\" (ID #%d)"
 msgstr ""
 
-#: includes/Migration/Posts.php:158
-msgid "%d records failed to update its post_author: %s"
+#. translators: %1$d: number of records, %2$s: list of IDs
+#: includes/Migration/Posts.php:163
+msgid "%1$d records failed to update its post_author: %2$s"
 msgstr ""
 
-#: includes/Migration/Posts.php:166
+#. translators: %s: list of IDs
+#: includes/Migration/Posts.php:172
 msgid "The following records have the new ID equal to the old ID: %s"
 msgstr ""
 
-#: includes/Multilang/Migration.php:72
+#: includes/Multilang/Migration.php:65
+msgid "The --url global parameter is required and cannot be empty for multisite installations."
+msgstr ""
+
+#: includes/Multilang/Migration.php:83
 msgid "Invalid or non-public blog ID"
 msgstr ""
 
-#: includes/Multilang/Migration.php:112
+#: includes/Multilang/Migration.php:100
+msgid "The meta key is required."
+msgstr ""
+
+#: includes/Multilang/Migration.php:125
 msgid "The migration did not take place. No posts found with the specified Workflow meta key."
+msgstr ""
+
+#: includes/Multilang/Stats.php:80
+msgid "Processing site:"
+msgstr ""
+
+#. translators: %s: The number of sites processed.
+#: includes/Multilang/Stats.php:102
+msgid "Total sites processed: %s"
+msgstr ""
+
+#: includes/Multilang/Stats.php:110
+msgid "Linked sites URLs:"
+msgstr ""
+
+#: includes/Multilang/Stats.php:116
+msgid "Not linked sites URLs:"
 msgstr ""
