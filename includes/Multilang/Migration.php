@@ -54,6 +54,18 @@ class Migration extends Command
             $this->force = true;
         }
 
+        // Check if the installation is a multisite
+        if (is_multisite()) {
+            // Retrieve the global --url parameter
+            $globalConfig = WP_CLI::get_runner()->config;
+            if (isset($globalConfig['url']) && !empty($globalConfig['url'])) {
+                $url = $globalConfig['url'];
+                WP_CLI::log("Global URL provided: $url");
+            } else {
+                WP_CLI::error(__('The --url global parameter is required and cannot be empty for multisite installations.', 'rrze-cli'));
+            }
+        }
+
         $this->process_args(
             [],
             $args,
@@ -63,29 +75,30 @@ class Migration extends Command
             $assocArgs
         );
 
-        $blogId = get_current_blog_id();
         $metaKey = $this->assoc_args['meta_key'];
 
         // Check if the blog ID exists and is public
-        $blogDetails = get_blog_details($blogId);
+        $blogDetails = get_blog_details();
         if (!$blogDetails || !$blogDetails->public) {
             WP_CLI::error(__('Invalid or non-public blog ID', 'rrze-cli'));
         }
 
         WP_CLI::log("Website: " . $blogDetails->siteurl);
 
-        $this->start($blogId, $metaKey);
+        $this->start($metaKey);
     }
 
     /**
      * Start the migration process.
-     * @param int $blogId
      * @param string $metaKey
      * @return void
      */
-    private function start($blogId, $metaKey)
+    private function start($metaKey)
     {
-        switch_to_blog($blogId);
+        // Check if the meta key is provided
+        if (empty($metaKey)) {
+            WP_CLI::error(__('The meta key is required.', 'rrze-cli'));
+        }
 
         // Get all published post IDs with the specified meta_key.
         $args = [
@@ -112,22 +125,40 @@ class Migration extends Command
             WP_CLI::error(__('The migration did not take place. No posts found with the specified Workflow meta key.', 'rrze-cli'));
         }
 
-        // Array to store post IDs and their corresponding meta values.
-        $postsWithMeta = [];
-
         // Initialize a variable to store the success status of the migration.
         $success = false;
 
+        global $wpdb;
+
         foreach ($postIds as $postId) {
-            // Retrieve the meta value for the current post ID.
-            $metaValue = get_post_meta($postId, $metaKey, true);
-            $blogIdReference = $metaValue['blog_id'] ?? '';
-            $postIdReference = $metaValue['post_id'] ?? '';
+            // Query the database to get the most recent record for the given post ID and meta key.
+            $metaEntry = $wpdb->get_row(
+                $wpdb->prepare(
+                    "SELECT meta_id, meta_value 
+                     FROM {$wpdb->postmeta} 
+                     WHERE post_id = %d AND meta_key = %s 
+                     ORDER BY meta_id DESC 
+                     LIMIT 1",
+                    $postId,
+                    $metaKey
+                ),
+                ARRAY_A
+            );
+
+            if (empty($metaEntry)) {
+                continue; // Skip if no meta entry is found.
+            }
+
+            // Extract the meta_value and decode it if it's serialized.
+            $metaValue = maybe_unserialize($metaEntry['meta_value']);
+
+            // Process the meta_value as needed.
+            $blogIdReference = !empty($metaValue['blog_id']) ? absint($metaValue['blog_id']) : 0;
+            $postIdReference = !empty($metaValue['post_id']) ? absint($metaValue['post_id']) : 0;
+
             if (!$blogIdReference || !$postIdReference) {
                 continue;
             }
-
-            $postsWithMeta[$postId] = $metaValue; // Map post ID to meta value.
 
             if (metadata_exists('post', $postId, '_rrze_multilang_multiple_reference') && !$this->force) {
                 continue;
@@ -137,11 +168,9 @@ class Migration extends Command
                 $blogIdReference => $postIdReference
             ];
 
-            delete_post_meta($postId, '_rrze_multilang_multiple_reference'); // remove all metadata matching the key.
-            $success = add_post_meta($postId, '_rrze_multilang_multiple_reference', $multilangMeta); // add metadata to the post.
+            delete_post_meta($postId, '_rrze_multilang_multiple_reference'); // Remove all metadata matching the key.
+            $success = add_post_meta($postId, '_rrze_multilang_multiple_reference', $multilangMeta); // Add metadata to the post.
         }
-
-        restore_current_blog();
 
         if ($success) {
             WP_CLI::success('Migration completed successfully.');
