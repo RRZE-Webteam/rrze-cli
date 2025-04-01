@@ -161,6 +161,14 @@ class Migration extends Command
                 continue;
             }
 
+            // Check if the blog ID exists and is valid (not archived or deleted).
+            $blogDetails = get_blog_details($blogIdReference);
+
+            if (!$blogDetails || $blogDetails->archived || $blogDetails->deleted) {
+                WP_CLI::log("Blog ID $blogIdReference is invalid, archived, or deleted.");
+                continue; // Skip if the blog ID is invalid, archived, or deleted.
+            }
+
             $hasPostIdReference = false;
             // Check if the post ID reference exists in the specified blog ID.
             switch_to_blog($blogIdReference); // Switch to the blog ID reference.
@@ -176,7 +184,7 @@ class Migration extends Command
             }
             restore_current_blog(); // Restore the current blog context.
             if (!$hasPostIdReference) {
-                WP_CLI::log("Post ID reference does not exist in blog ID reference: $blogIdReference");
+                WP_CLI::log("Post ID reference $postIdReference does not exist in blog ID reference $blogIdReference");
                 continue; // Skip if the post ID reference does not exist.
             }
 
