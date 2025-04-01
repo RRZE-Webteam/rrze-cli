@@ -2,14 +2,14 @@
 # This file is distributed under the GNU General Public License v2.
 msgid ""
 msgstr ""
-"Project-Id-Version: RRZE CLI 1.2.1\n"
+"Project-Id-Version: RRZE CLI 1.2.3\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/rrze-cli\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2025-03-31T15:43:50+00:00\n"
+"POT-Creation-Date: 2025-04-01T12:07:18+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.11.0\n"
 "X-Domain: rrze-cli\n"
@@ -321,19 +321,23 @@ msgstr ""
 msgid "The following records have the new ID equal to the old ID: %s"
 msgstr ""
 
-#: includes/Multilang/Migration.php:65
+#: includes/Multilang/Migration.php:53
+msgid "This command is only available for multisite installations."
+msgstr ""
+
+#: includes/Multilang/Migration.php:67
 msgid "The --url global parameter is required and cannot be empty for multisite installations."
 msgstr ""
 
-#: includes/Multilang/Migration.php:83
+#: includes/Multilang/Migration.php:84
 msgid "Invalid or non-public blog ID"
 msgstr ""
 
-#: includes/Multilang/Migration.php:100
+#: includes/Multilang/Migration.php:101
 msgid "The meta key is required."
 msgstr ""
 
-#: includes/Multilang/Migration.php:125
+#: includes/Multilang/Migration.php:126
 msgid "The migration did not take place. No posts found with the specified Workflow meta key."
 msgstr ""
 
