@@ -49,21 +49,22 @@ class Migration extends Command
             WP_CLI::error(__('This command must be run from the main directory of a WordPress installation.', 'rrze-cli'));
         }
 
+        if (!is_multisite()) {
+            WP_CLI::error(__('This command is only available for multisite installations.', 'rrze-cli'));
+        }
+
         // Check if the argument force is set.
         if (isset($assocArgs['force'])) {
             $this->force = true;
         }
 
-        // Check if the installation is a multisite
-        if (is_multisite()) {
-            // Retrieve the global --url parameter
-            $globalConfig = WP_CLI::get_runner()->config;
-            if (isset($globalConfig['url']) && !empty($globalConfig['url'])) {
-                $url = $globalConfig['url'];
-                WP_CLI::log("Global URL provided: $url");
-            } else {
-                WP_CLI::error(__('The --url global parameter is required and cannot be empty for multisite installations.', 'rrze-cli'));
-            }
+        // Retrieve the global --url parameter
+        $globalConfig = WP_CLI::get_runner()->config;
+        if (isset($globalConfig['url']) && !empty($globalConfig['url'])) {
+            $url = $globalConfig['url'];
+            WP_CLI::log("Global URL provided: $url");
+        } else {
+            WP_CLI::error(__('The --url global parameter is required and cannot be empty for multisite installations.', 'rrze-cli'));
         }
 
         $this->process_args(
@@ -156,10 +157,30 @@ class Migration extends Command
             $blogIdReference = !empty($metaValue['blog_id']) ? absint($metaValue['blog_id']) : 0;
             $postIdReference = !empty($metaValue['post_id']) ? absint($metaValue['post_id']) : 0;
 
-            if (!$blogIdReference || !$postIdReference) {
+            if (empty($blogIdReference) || empty($postIdReference)) {
                 continue;
             }
 
+            $hasPostIdReference = false;
+            // Check if the post ID reference exists in the specified blog ID.
+            switch_to_blog($blogIdReference); // Switch to the blog ID reference.
+            global $wpdb;
+            $postExists = $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT ID FROM {$wpdb->posts} WHERE ID = %d LIMIT 1",
+                    $postIdReference
+                )
+            );
+            if ($postExists) {
+                $hasPostIdReference = true; // Post ID reference exists.
+            }
+            restore_current_blog(); // Restore the current blog context.
+            if (!$hasPostIdReference) {
+                WP_CLI::log("Post ID reference does not exist in blog ID reference: $blogIdReference");
+                continue; // Skip if the post ID reference does not exist.
+            }
+
+            // Check if the metadata already exists for the post ID.
             if (metadata_exists('post', $postId, '_rrze_multilang_multiple_reference') && !$this->force) {
                 continue;
             }
