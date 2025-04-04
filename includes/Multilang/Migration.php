@@ -39,12 +39,12 @@ class Migration extends Command
      * ## OPTIONS
      * <main|secondary>
      * : The main or secondary website.
-     * [--force]
-     * : Forces rewriting of metadata.
      * --meta_key=<meta_key>
      * : The meta key to migrate.
-     * --url=<url>
-     * : The URL of the website.
+     * [--force]
+     * : Forces rewriting of metadata.
+     * [--verbose]
+     * : Enables verbose output.
      * 
      * ## EXAMPLES
      * wp rrze-multilang migration workflow main --meta_key=_version_remote_parent_post_meta --url=www.site.de
@@ -92,10 +92,16 @@ class Migration extends Command
 
         $metaKey = $this->assoc_args['meta_key'];
 
-        // Check if the blog ID exists and is public
+        // Check if the blog ID exists or is valid (not archived or deleted).
         $blogDetails = get_blog_details();
-        if (!$blogDetails || !$blogDetails->public) {
-            WP_CLI::error(__('Invalid or non-public blog ID', 'rrze-cli'));
+        if (!$blogDetails || $blogDetails->archived || $blogDetails->deleted) {
+            WP_CLI::error(
+                sprintf(
+                    /* translators: 1: Blog ID reference */
+                    __('Blog ID %s is invalid, archived, or deleted.', 'rrze-cli'),
+                    $blogDetails->blog_id
+                )
+            );
         }
 
         WP_CLI::log("Website: " . $blogDetails->siteurl);
@@ -145,6 +151,17 @@ class Migration extends Command
 
         global $wpdb;
 
+        if ($this->verbose) {
+            WP_CLI::log(
+                sprintf(
+                    /* translators: 1: Number of posts found, 2: Meta key */
+                    __('Found %1$d posts with the meta key %2$s', 'rrze-cli'),
+                    count($postIds),
+                    $metaKey
+                )
+            );
+        }
+
         foreach ($postIds as $postId) {
             if ($this->isMain) {
                 // Get the meta value for the main website.
@@ -176,6 +193,16 @@ class Migration extends Command
             }
 
             $multilangMeta = []; // Initialize an array to store the multilingual metadata.
+
+            if ($this->verbose) {
+                WP_CLI::log(
+                    sprintf(
+                        /* translators: 1: Post ID */
+                        __('Processing post ID %1$d...', 'rrze-cli'),
+                        $postId
+                    )
+                );
+            }
 
             // Loop through the meta value to extract blog ID and post ID references.
             foreach ($metaEntry as $metaValue) {
