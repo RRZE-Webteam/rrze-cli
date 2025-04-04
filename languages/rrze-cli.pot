@@ -2,14 +2,14 @@
 # This file is distributed under the GNU General Public License v2.
 msgid ""
 msgstr ""
-"Project-Id-Version: RRZE CLI 1.2.4\n"
+"Project-Id-Version: RRZE CLI 1.2.5\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/rrze-cli\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2025-04-03T15:58:37+00:00\n"
+"POT-Creation-Date: 2025-04-04T12:21:34+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.11.0\n"
 "X-Domain: rrze-cli\n"
@@ -59,7 +59,7 @@ msgstr ""
 
 #: includes/Main.php:43
 #: includes/Multilang/Migration.php:62
-#: includes/Multilang/Stats.php:39
+#: includes/Multilang/Stats.php:64
 msgid "This command must be run from the main directory of a WordPress installation."
 msgstr ""
 
@@ -325,49 +325,79 @@ msgstr ""
 msgid "This command is only available for multisite installations."
 msgstr ""
 
-#: includes/Multilang/Migration.php:98
-msgid "Invalid or non-public blog ID"
-msgstr ""
-
-#: includes/Multilang/Migration.php:115
-msgid "The meta key is required."
-msgstr ""
-
-#: includes/Multilang/Migration.php:140
-msgid "The migration did not take place. No posts found with the specified Workflow meta key."
-msgstr ""
-
 #. translators: 1: Blog ID reference
-#: includes/Multilang/Migration.php:201
+#: includes/Multilang/Migration.php:101
+#: includes/Multilang/Migration.php:228
 msgid "Blog ID %s is invalid, archived, or deleted."
 msgstr ""
 
+#: includes/Multilang/Migration.php:121
+msgid "The meta key is required."
+msgstr ""
+
+#: includes/Multilang/Migration.php:146
+msgid "The migration did not take place. No posts found with the specified Workflow meta key."
+msgstr ""
+
+#. translators: 1: Number of posts found, 2: Meta key
+#: includes/Multilang/Migration.php:158
+msgid "Found %1$d posts with the meta key %2$s"
+msgstr ""
+
+#. translators: 1: Post ID
+#: includes/Multilang/Migration.php:201
+msgid "Processing post ID %1$d..."
+msgstr ""
+
 #. translators: 1: Post ID reference, 2: Blog ID reference
-#: includes/Multilang/Migration.php:226
+#: includes/Multilang/Migration.php:253
 msgid "Post ID reference %1$s does not exist in blog ID reference %2$s"
 msgstr ""
 
-#: includes/Multilang/Migration.php:253
+#: includes/Multilang/Migration.php:280
 msgid "Migration completed successfully."
 msgstr ""
 
-#: includes/Multilang/Migration.php:255
+#: includes/Multilang/Migration.php:282
 msgid "The migration did not take place. One or more Multisite metadata already existed."
 msgstr ""
 
-#: includes/Multilang/Stats.php:80
-msgid "Processing site:"
+#. translators: %s: The URL of the website being processed.
+#: includes/Multilang/Stats.php:114
+msgid "Processing website: %s"
 msgstr ""
 
-#. translators: %s: The number of sites processed.
-#: includes/Multilang/Stats.php:102
-msgid "Total sites processed: %s"
+#. translators: %s: The number of websites processed.
+#: includes/Multilang/Stats.php:149
+msgid "Total websites processed: %s"
 msgstr ""
 
-#: includes/Multilang/Stats.php:110
-msgid "Linked sites URLs:"
+#. translators: 1: Number of linked websites, 2: Total number of websites, 3: New line, 4: Linked websites URLs
+#: includes/Multilang/Stats.php:161
+msgid "Linked websites URLs (%1$d/%2$d):%3$s%4$s"
 msgstr ""
 
-#: includes/Multilang/Stats.php:116
-msgid "Not linked sites URLs:"
+#. translators: 1: Number of not linked websites, 2: Total number of websites, 3: New line, 4: Not linked websites URLs
+#: includes/Multilang/Stats.php:177
+msgid "Not linked websites URLs (%1$d/%2$d):%3$s%4$s"
+msgstr ""
+
+#. translators: %s: The URL of the website being processed.
+#: includes/Multilang/Stats.php:202
+msgid "Deactivating network module for website: %s"
+msgstr ""
+
+#. translators: %s: The URL of the website being processed.
+#: includes/Multilang/Stats.php:213
+msgid "Network module deactivated for website: %s"
+msgstr ""
+
+#. translators: %s: The URL of the website being processed.
+#: includes/Multilang/Stats.php:227
+msgid "Deactivating translation module for website: %s"
+msgstr ""
+
+#. translators: %s: The URL of the website being processed.
+#: includes/Multilang/Stats.php:238
+msgid "Translation module deactivated for website: %s"
 msgstr ""
