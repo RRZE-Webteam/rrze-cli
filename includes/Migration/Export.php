@@ -220,49 +220,43 @@ class Export extends Command
 
         $url = get_home_url();
 
-        // If the tables to be exported have not been provided, obtain them automatically.
-        if (empty($this->assoc_args['tables'])) {
-            $assoc_args = ['format' => 'csv'];
+        if (empty($this->assoc_args['tables']) && empty($this->assoc_args['custom-tables'])) {
+            if (is_multisite()) {
+                // Multisite: Export only tables with the current blog prefix (e.g., wp_3_)
+                $assoc_args = ['format' => 'csv', 'all-tables-with-prefix' => 1];
+                $tables_result = Utils::runcommand('db tables', [], $assoc_args, ['url' => $url]);
 
-            if (empty($this->assoc_args['custom-tables'])) {
-                $assoc_args['all-tables-with-prefix'] = 1;
-            }
+                if ($tables_result->return_code === 0) {
+                    $all_tables = explode(',', $tables_result->stdout);
+                    $prefix = $wpdb->prefix;
+                    // Filter tables to include only those with the current blog's prefix
+                    $tables = array_filter($all_tables, function ($table) use ($prefix) {
+                        return strpos($table, $prefix) === 0;
+                    });
+                } else {
+                    WP_CLI::error(__('Could not retrieve the list of tables.', 'rrze-cli'));
+                }
+            } else {
+                // Single site: Export all tables in the database (no prefix filtering)
+                $assoc_args = ['format' => 'csv'];
+                $tables_result = Utils::runcommand('db tables', [], $assoc_args, ['url' => $url]);
 
-            $tables = Utils::runcommand('db tables', [], $assoc_args, ['url' => $url]);
-
-            if (0 === $tables->return_code) {
-                $tables = $tables->stdout;
-                $tables = explode(',', $tables);
-
-                $tables_to_remove = [
-                    $wpdb->prefix . 'users',
-                    $wpdb->prefix . 'usermeta',
-                    $wpdb->prefix . 'blog_versions',
-                    $wpdb->prefix . 'blogs',
-                    $wpdb->prefix . 'site',
-                    $wpdb->prefix . 'sitemeta',
-                    $wpdb->prefix . 'registration_log',
-                    $wpdb->prefix . 'signups',
-                    $wpdb->prefix . 'sitecategories',
-                ];
-
-                foreach ($tables as $key => &$table) {
-                    $table = trim($table);
-
-                    if (in_array($table, $tables_to_remove)) {
-                        unset($tables[$key]);
-                    }
+                if ($tables_result->return_code === 0) {
+                    $tables = explode(',', $tables_result->stdout);
+                } else {
+                    WP_CLI::error(__('Could not retrieve the list of tables.', 'rrze-cli'));
                 }
             }
-
-            if (!empty($this->assoc_args['custom-tables'])) {
-                $non_default_tables = explode(',', $this->assoc_args['custom-tables']);
-
-                $tables = array_unique(array_merge($tables, $non_default_tables));
-            }
         } else {
-            // Get the user supplied tables list.
-            $tables = explode(',', $this->assoc_args['tables']);
+            // If user specified tables or custom-tables, use exactly those
+            $tables = [];
+            if (!empty($this->assoc_args['tables'])) {
+                $tables = explode(',', $this->assoc_args['tables']);
+            }
+            if (!empty($this->assoc_args['custom-tables'])) {
+                $custom_tables = explode(',', $this->assoc_args['custom-tables']);
+                $tables = array_merge($tables, $custom_tables);
+            }
         }
 
         if (is_array($tables) && !empty($tables)) {
