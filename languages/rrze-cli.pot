@@ -2,14 +2,14 @@
 # This file is distributed under the GNU General Public License v2.
 msgid ""
 msgstr ""
-"Project-Id-Version: RRZE CLI 1.2.5\n"
+"Project-Id-Version: RRZE CLI 1.2.6\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/rrze-cli\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2025-04-04T12:21:34+00:00\n"
+"POT-Creation-Date: 2025-07-11T09:58:07+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.11.0\n"
 "X-Domain: rrze-cli\n"
@@ -104,28 +104,33 @@ msgstr ""
 msgid "Please provide a filename for the exported SQL file"
 msgstr ""
 
-#: includes/Migration/Export.php:272
+#: includes/Migration/Export.php:237
+#: includes/Migration/Export.php:247
+msgid "Could not retrieve the list of tables."
+msgstr ""
+
+#: includes/Migration/Export.php:266
 msgid "The export is now complete"
 msgstr ""
 
-#: includes/Migration/Export.php:274
+#: includes/Migration/Export.php:268
 msgid "Something went wrong while trying to export the database"
 msgstr ""
 
-#: includes/Migration/Export.php:277
+#: includes/Migration/Export.php:271
 msgid "Unable to get the list of tables to be exported"
 msgstr ""
 
-#: includes/Migration/Export.php:322
+#: includes/Migration/Export.php:316
 msgid "Impossible to create the file"
 msgstr ""
 
-#: includes/Migration/Export.php:451
+#: includes/Migration/Export.php:445
 msgid "The headers and data length are not matching"
 msgstr ""
 
 #. translators: %d = number of users exported
-#: includes/Migration/Export.php:474
+#: includes/Migration/Export.php:468
 msgid "%d users have been exported"
 msgstr ""
 
@@ -400,4 +405,19 @@ msgstr ""
 #. translators: %s: The URL of the website being processed.
 #: includes/Multilang/Stats.php:238
 msgid "Translation module deactivated for website: %s"
+msgstr ""
+
+#. translators: 1: Server WordPress version number, 2: Required WordPress version number.
+#: rrze-cli.php:133
+msgid "The server is running WordPress version %1$s. The plugin requires at least WordPress version %2$s."
+msgstr ""
+
+#. translators: 1: Server PHP version number, 2: Required PHP version number.
+#: rrze-cli.php:140
+msgid "The server is running PHP version %1$s. The plugin requires at least PHP version %2$s."
+msgstr ""
+
+#. translators: 1: The plugin name, 2: The error string.
+#: rrze-cli.php:152
+msgid "Plugins: %1$s: %2$s"
 msgstr ""
