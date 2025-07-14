@@ -283,6 +283,9 @@ class Export extends Command
      * [--woocomerce]
      * : Include all wc_customer_user (if WooCommerce is installed).
      * 
+     * [--usersuffix=<string>]
+     * : Optional. Suffix to append to the `user_login` field in the CSV export.
+     * 
      * ## EXAMPLES
      * 
      *     # Exports all website users and wc_customer_user with ID=2 to a CSV file.
@@ -307,6 +310,8 @@ class Export extends Command
             $assoc_args
         );
 
+        $usersuffix = isset($this->assoc_args['usersuffix']) ? $this->assoc_args['usersuffix'] : '';
+
         $filename  = $this->args[0];
         $delimiter = ',';
 
@@ -324,21 +329,6 @@ class Export extends Command
 
         $users_args['blog_id'] = $blogId;
 
-        $excluded_meta_keys = [
-            'session_tokens' => true,
-            'primary_blog'   => true,
-            'source_domain'  => true,
-        ];
-
-        // Do not include meta keys that depend on the db prefix.
-        $excluded_meta_keys_regex = [
-            '/capabilities$/',
-            '/user_level$/',
-            '/dashboard_quick_press_last_post_id$/',
-            '/user-settings$/',
-            '/user-settings-time$/',
-        ];
-
         $count = 0;
         $users = get_users($users_args);
         $user_data_arr = [];
@@ -347,10 +337,17 @@ class Export extends Command
         foreach ($users as $user) {
             $role = isset($user->roles[0]) ? $user->roles[0] : '';
 
+            $user_login = $user->data->user_login;
+            if (!empty($usersuffix) && substr($usersuffix, 0, 1) === '@') {
+                if (strpos($user_login, '@') === false) {
+                    $user_login .= $usersuffix;
+                }
+            }
+
             $user_data = [
                 // General Info.
                 $user->data->ID,
-                $user->data->user_login,
+                $user_login,
                 $user->data->user_pass,
                 $user->data->user_nicename,
                 $user->data->user_email,
@@ -361,15 +358,10 @@ class Export extends Command
                 $user->data->display_name,
 
                 // User Meta.
-                $user->get('rich_editing'),
-                $user->get('admin_color'),
-                $user->get('show_admin_bar_front'),
                 $user->get('first_name'),
                 $user->get('last_name'),
                 $user->get('nickname'),
-                $user->get('aim'),
-                $user->get('yim'),
-                $user->get('jabber'),
+                $user->get('url'),
                 $user->get('description'),
                 $user->get('_application_passwords'),
             ];
@@ -392,10 +384,8 @@ class Export extends Command
                     $can_add = true;
 
                     // Checking for unwanted meta keys.
-                    foreach ($excluded_meta_keys_regex as $regex) {
-                        if (preg_match($regex, $user_meta_key)) {
-                            $can_add = false;
-                        }
+                    if (!in_array($user_meta_key, $headers, true)) {
+                        $can_add = false;
                     }
 
                     if (!$can_add) {
@@ -424,10 +414,6 @@ class Export extends Command
 
                 $user_data[$user_meta_key] = $value;
             }
-
-            // Adding the meta_keys that aren't in the $headers variable to the $headers variable.
-            $diff    = array_diff($meta_keys, $headers);
-            $headers = array_merge($headers, $diff);
 
             /**
              * Filters the default set of user data to be exported/imported.
@@ -493,15 +479,10 @@ class Export extends Command
             'display_name',
 
             // User Meta.
-            'rich_editing',
-            'admin_color',
-            'show_admin_bar_front',
             'first_name',
             'last_name',
             'nickname',
-            'aim',
-            'yim',
-            'jabber',
+            'url',
             'description',
             '_application_passwords',
         ];
