@@ -363,6 +363,8 @@ class Export extends Command
                 $user->get('nickname'),
                 $user->get('url'),
                 $user->get('description'),
+                $user->get('capabilities'),
+                $user->get('user_level'),
                 $user->get('_application_passwords'),
             ];
 
@@ -484,6 +486,8 @@ class Export extends Command
             'nickname',
             'url',
             'description',
+            'capabilities',
+            'user_level',
             '_application_passwords',
         ];
 
