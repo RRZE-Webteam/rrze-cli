@@ -363,8 +363,6 @@ class Export extends Command
                 $user->get('nickname'),
                 $user->get('url'),
                 $user->get('description'),
-                $user->get('capabilities'),
-                $user->get('user_level'),
                 $user->get('_application_passwords'),
             ];
 
@@ -382,18 +380,14 @@ class Export extends Command
 
             // Removing all unwanted meta keys.
             foreach ($meta_keys as $user_meta_key) {
-                if (!isset($excluded_meta_keys[$user_meta_key])) {
-                    $can_add = true;
+                $can_add = true;
 
-                    // Checking for unwanted meta keys.
-                    if (!in_array($user_meta_key, $headers, true)) {
-                        $can_add = false;
-                    }
+                // Checking for unwanted meta keys.
+                if (!in_array($user_meta_key, $headers, true)) {
+                    $can_add = false;
+                }
 
-                    if (!$can_add) {
-                        unset($user_meta[$user_meta_key]);
-                    }
-                } else {
+                if (!$can_add) {
                     unset($user_meta[$user_meta_key]);
                 }
             }
@@ -404,7 +398,7 @@ class Export extends Command
             foreach ($meta_keys as $user_meta_key) {
                 $value = $user_meta[$user_meta_key];
 
-                // Get_user_meta always return an array whe no $key is passed.
+                // Get_user_meta always return an array when no $key is passed.
                 if (is_array($value) && 1 === count($value)) {
                     $value = $value[0];
                 }
@@ -486,8 +480,6 @@ class Export extends Command
             'nickname',
             'url',
             'description',
-            'capabilities',
-            'user_level',
             '_application_passwords',
         ];
 
