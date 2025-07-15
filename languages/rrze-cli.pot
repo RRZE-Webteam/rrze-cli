@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2025-07-14T13:34:25+00:00\n"
+"POT-Creation-Date: 2025-07-15T12:58:47+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.11.0\n"
 "X-Domain: rrze-cli\n"
@@ -63,74 +63,74 @@ msgstr ""
 msgid "This command must be run from the main directory of a WordPress installation."
 msgstr ""
 
-#: includes/Migration/Export.php:108
+#: includes/Migration/Export.php:112
 msgid "Exporting site meta data..."
 msgstr ""
 
-#: includes/Migration/Export.php:111
+#: includes/Migration/Export.php:115
 msgid "Exporting users..."
 msgstr ""
 
-#: includes/Migration/Export.php:114
+#: includes/Migration/Export.php:118
 msgid "Exporting tables..."
 msgstr ""
 
-#: includes/Migration/Export.php:129
+#: includes/Migration/Export.php:133
 msgid "Including plugins directory..."
 msgstr ""
 
-#: includes/Migration/Export.php:134
+#: includes/Migration/Export.php:138
 msgid "Including themes directory..."
 msgstr ""
 
-#: includes/Migration/Export.php:144
+#: includes/Migration/Export.php:148
 msgid "Including website uploads directory..."
 msgstr ""
 
-#: includes/Migration/Export.php:149
+#: includes/Migration/Export.php:153
 msgid "Zipping files..."
 msgstr ""
 
 #. translators: %s: zip file name
-#: includes/Migration/Export.php:168
+#: includes/Migration/Export.php:172
 msgid "A zip file named %s has been created"
 msgstr ""
 
-#: includes/Migration/Export.php:173
+#: includes/Migration/Export.php:177
 msgid "Something went wrong while trying to create the zip file"
 msgstr ""
 
-#: includes/Migration/Export.php:218
+#: includes/Migration/Export.php:222
 msgid "Please provide a filename for the exported SQL file"
 msgstr ""
 
-#: includes/Migration/Export.php:237
-#: includes/Migration/Export.php:247
+#: includes/Migration/Export.php:241
+#: includes/Migration/Export.php:251
 msgid "Could not retrieve the list of tables."
 msgstr ""
 
-#: includes/Migration/Export.php:266
+#: includes/Migration/Export.php:270
 msgid "The export is now complete"
 msgstr ""
 
-#: includes/Migration/Export.php:268
+#: includes/Migration/Export.php:272
 msgid "Something went wrong while trying to export the database"
 msgstr ""
 
-#: includes/Migration/Export.php:271
+#: includes/Migration/Export.php:275
 msgid "Unable to get the list of tables to be exported"
 msgstr ""
 
-#: includes/Migration/Export.php:321
+#: includes/Migration/Export.php:326
 msgid "Impossible to create the file"
 msgstr ""
 
-#: includes/Migration/Export.php:431
+#: includes/Migration/Export.php:432
 msgid "The headers and data length are not matching"
 msgstr ""
 
 #. translators: %d = number of users exported
-#: includes/Migration/Export.php:454
+#: includes/Migration/Export.php:455
 msgid "%d users have been exported"
 msgstr ""
 
@@ -227,64 +227,65 @@ msgstr ""
 msgid "Database imported"
 msgstr ""
 
-#: includes/Migration/Import.php:542
-msgid "Running search-replace"
+#. translators: %1$s: old_url, %2$s: new_url
+#: includes/Migration/Import.php:547
+msgid "Running search-replace for url: %1$s -> %2$s"
 msgstr ""
 
-#: includes/Migration/Import.php:561
-msgid "Search and Replace has been successfully executed"
-msgstr ""
-
-#: includes/Migration/Import.php:563
-msgid "Could not run search-replace"
+#: includes/Migration/Import.php:565
+msgid "Search and Replace for url has been successfully executed"
 msgstr ""
 
 #: includes/Migration/Import.php:567
+msgid "Could not run search-replace for url"
+msgstr ""
+
+#: includes/Migration/Import.php:571
 msgid "Running Search and Replace for uploads paths"
 msgstr ""
 
 #. translators: %1$s: from, %2$s: to
-#: includes/Migration/Import.php:594
+#: includes/Migration/Import.php:598
 msgid "Uploads paths have been successfully updated: %1$s -> %2$s"
 msgstr ""
 
-#: includes/Migration/Import.php:601
+#: includes/Migration/Import.php:605
 msgid "Could not run search-replace for uploads paths"
 msgstr ""
 
-#: includes/Migration/Import.php:643
+#: includes/Migration/Import.php:647
 msgid "Could not find the plugins folder"
 msgstr ""
 
-#: includes/Migration/Import.php:647
+#: includes/Migration/Import.php:651
 msgid "Moving Plugins..."
 msgstr ""
 
-#: includes/Migration/Import.php:684
+#: includes/Migration/Import.php:688
 msgid "Could not find the uploads folder"
 msgstr ""
 
-#: includes/Migration/Import.php:688
+#: includes/Migration/Import.php:692
 msgid "Moving uploads..."
 msgstr ""
 
-#: includes/Migration/Import.php:703
+#: includes/Migration/Import.php:707
 msgid "Could not find the themes folder"
 msgstr ""
 
-#: includes/Migration/Import.php:707
+#: includes/Migration/Import.php:711
 msgid "Moving Themes..."
 msgstr ""
 
-#: includes/Migration/Import.php:789
+#: includes/Migration/Import.php:793
 msgid "It was not possible to do a search and replace of the SQL file."
 msgstr ""
 
-#: includes/Migration/Import.php:793
+#: includes/Migration/Import.php:797
 msgid "Could not overwrite SQL file."
 msgstr ""
 
-#: includes/Migration/Import.php:808
+#: includes/Migration/Import.php:812
 msgid "Deleting transients..."
 msgstr ""
 
