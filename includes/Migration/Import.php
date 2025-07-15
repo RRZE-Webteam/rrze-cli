@@ -539,28 +539,32 @@ class Import extends Command
 
         // Perform search and replace.
         if (!empty($this->assoc_args['old_url']) && !empty($this->assoc_args['new_url'])) {
-            $this->log(__('Running search-replace', 'rrze-cli'), $verbose);
-
             $old_url = Utils::parse_url_for_search_replace($this->assoc_args['old_url']);
             $new_url = Utils::parse_url_for_search_replace($this->assoc_args['new_url']);
 
-            // $search_replace = Utils::runcommand('search-replace', [$old_url, $new_url], [], ['url' => $new_url]);
+            $this->log(sprintf(
+                /* translators: %1$s: old_url, %2$s: new_url */
+                __('Running search-replace for url: %1$s -> %2$s', 'rrze-cli'),
+                $old_url,
+                $new_url
+            ), $verbose);
+
             $search_replace = WP_CLI::launch_self(
                 'search-replace',
                 [
                     $old_url,
                     $new_url,
                 ],
-                ['skip-tables' => 'wp_blogs'],
+                [],
                 false,
                 false,
                 ['url' => $new_url]
             );
 
             if (0 === $search_replace) {
-                $this->log(__('Search and Replace has been successfully executed', 'rrze-cli'), $verbose);
+                $this->log(__('Search and Replace for url has been successfully executed', 'rrze-cli'), $verbose);
             } else {
-                WP_CLI::warning(__('Could not run search-replace', 'rrze-cli'));
+                WP_CLI::warning(__('Could not run search-replace for url', 'rrze-cli'));
                 return;
             }
 
