@@ -40,6 +40,9 @@ class Export extends Command
      * [--verbose]
      * : Display additional details during command execution.
      * 
+     * [--usersuffix=<string>]
+     * : Optional. Suffix to append to the `user_login` field in the CSV export.
+     * 
      * ## EXAMPLES
      * 
      * Exports a website to website.zip file.
@@ -80,6 +83,7 @@ class Export extends Command
             [
                 'tables'        => '',
                 'custom-tables' => '',
+                'usersuffix' => '',
             ],
             $assoc_args
         );
@@ -90,7 +94,7 @@ class Export extends Command
         $include_themes  = isset($this->assoc_args['themes']) ? true : false;
         $include_uploads = isset($this->assoc_args['uploads']) ? true : false;
 
-        $users_assoc_args  = [];
+        $users_assoc_args['usersuffix'] = $this->assoc_args['usersuffix'];
         $tables_assoc_args = [
             'tables'        => $this->assoc_args['tables'],
             'custom-tables' => $this->assoc_args['custom-tables'],
@@ -306,6 +310,7 @@ class Export extends Command
             $args,
             [
                 'woocomerce' => false,
+                'usersuffix' => '',
             ],
             $assoc_args
         );
