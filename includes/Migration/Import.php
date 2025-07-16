@@ -555,7 +555,7 @@ class Import extends Command
                     $old_url,
                     $new_url,
                 ],
-                [],
+                ['skip-tables' => 'wp_blogs'],
                 false,
                 false,
                 ['url' => $new_url]
