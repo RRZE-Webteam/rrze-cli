@@ -9,42 +9,45 @@ use WP_CLI;
 
 /**
  * Exports an entire website into a zip package.
- * 
+ *
  * @package RRZE\CLI
  */
 class Export extends Command
 {
     /**
-     * Exports a website to a ZIP file.
+     * Export a website to a ZIP file.
      *
      * ## OPTIONS
-     * 
+     *
      * [<outputfile>]
-     * : The name of the exported ZIP file.
-     * 
+     * : The name (or path) of the exported ZIP file. Relative paths are resolved from ABSPATH.
+     *
      * [--tables=<table_list>]
      * : Comma-separated list of tables to be exported.
-     * 
+     *
      * [--custom-tables=<custom_table_list>]
      * : Comma-separated list of non-standard tables to be exported.
-     * 
+     *
      * [--plugins]
      * : Includes the whole plugins directory. Don't use this option if you don't know what you're doing.
-     * 
+     *
      * [--themes]
      * : Includes website theme/child directory. Don't use this option if you don't know what you're doing.
-     * 
+     *
      * [--uploads]
      * : Includes website uploads directory. Don't use this option if you don't know what you're doing.
-     * 
+     *
      * [--verbose]
      * : Display additional details during command execution.
-     * 
+     *
      * [--usersuffix=<string>]
      * : Optional. Suffix to append to the `user_login` field in the CSV export.
-     * 
+     *
+     * [--usersuffixtrim=<string>]
+     * : Optional. Suffix to trim from the `user_login` field if present (e.g. "@fau.de").
+     *
      * ## EXAMPLES
-     * 
+     *
      * Exports a website to website.zip file.
      * wp rrze-migration export all [--url=website-url]
      *
@@ -55,11 +58,12 @@ class Export extends Command
     {
         global $wpdb;
 
-        $verbose = false;
-
-        if (isset($assoc_args['verbose'])) {
-            $verbose = true;
+        // Ensure get_plugins() is available in WP-CLI context.
+        if (!function_exists('get_plugins')) {
+            require_once ABSPATH . 'wp-admin/includes/plugin.php';
         }
+
+        $verbose = isset($assoc_args['verbose']);
 
         $blogId = get_current_blog_id();
 
@@ -72,57 +76,76 @@ class Export extends Command
             'plugins'         => get_plugins(),
             'blog_plugins'    => get_option('active_plugins'),
             'network_plugins' => is_multisite() ? get_site_option('active_sitewide_plugins') : [],
-            'blog_id'         => $blogId
+            'blog_id'         => $blogId,
         ];
 
+        // Parse args and defaults for this subcommand.
         $this->process_args(
             [
                 0 => 'rrze-migration-' . sanitize_title($site_data['name']) . '.zip',
             ],
             $args,
             [
-                'tables'        => '',
-                'custom-tables' => '',
-                'usersuffix' => '',
+                'tables'         => '',
+                'custom-tables'  => '',
+                'usersuffix'     => '',
+                'usersuffixtrim' => '',
             ],
             $assoc_args
         );
 
-        $zip_file = ABSPATH . $this->args[0];
+        // Resolve the ZIP output path (supports absolute or relative).
+        $output   = $this->args[0];
+        $zip_file = (strpos($output, DIRECTORY_SEPARATOR) === 0 || preg_match('#^[A-Za-z]:\\\\#', $output))
+            ? $output
+            : rtrim(ABSPATH, '/\\') . '/' . ltrim($output, '/\\');
 
-        $include_plugins = isset($this->assoc_args['plugins']) ? true : false;
-        $include_themes  = isset($this->assoc_args['themes']) ? true : false;
-        $include_uploads = isset($this->assoc_args['uploads']) ? true : false;
+        // Ensure target directory exists.
+        $zip_dir = dirname($zip_file);
+        if (!is_dir($zip_dir) && !mkdir($zip_dir, 0775, true) && !is_dir($zip_dir)) {
+            WP_CLI::error(sprintf(__('Unable to create output directory: %s', 'rrze-cli'), $zip_dir));
+        }
 
-        $users_assoc_args['usersuffix'] = $this->assoc_args['usersuffix'];
-        $tables_assoc_args = [
-            'tables'        => $this->assoc_args['tables'],
-            'custom-tables' => $this->assoc_args['custom-tables'],
+        $include_plugins = isset($this->assoc_args['plugins']);
+        $include_themes  = isset($this->assoc_args['themes']);
+        $include_uploads = isset($this->assoc_args['uploads']);
+
+        // Forward user-related args to the users() export step.
+        $users_assoc_args = [
+            'usersuffix'     => $this->assoc_args['usersuffix'],
+            'usersuffixtrim' => $this->assoc_args['usersuffixtrim'],
+            'blog_id'        => $blogId,
         ];
 
-        $users_assoc_args['blog_id']  = $blogId;
-        $tables_assoc_args['blog_id'] = $blogId;
+        // Forward tables args to the tables() export step.
+        $tables_assoc_args = [
+            'tables'         => $this->assoc_args['tables'],
+            'custom-tables'  => $this->assoc_args['custom-tables'],
+            'blog_id'        => $blogId,
+        ];
 
-        // Adds a random prefix to temporary file names to ensure uniqueness and also for security reasons.
-        $rand = bin2hex(random_bytes(8));
-        $users_file = 'rrze-migration-' . $rand . '-' . sanitize_title($site_data['name']) . '.csv';
-        $tables_file = 'rrze-migration-' . $rand . '-' . sanitize_title($site_data['name']) . '.sql';
-        $meta_data_file = 'rrze-migration-' . $rand . '-' . sanitize_title($site_data['name']) . '.json';
+        // Use a random token to avoid collisions and for security hygiene.
+        $rand           = bin2hex(random_bytes(8));
+        $safe_site      = sanitize_title($site_data['name']);
+        $users_file     = "rrze-migration-{$rand}-{$safe_site}.csv";
+        $tables_file    = "rrze-migration-{$rand}-{$safe_site}.sql";
+        $meta_data_file = "rrze-migration-{$rand}-{$safe_site}.json";
 
         WP_CLI::log(__('Exporting site meta data...', 'rrze-cli'));
         file_put_contents($meta_data_file, wp_json_encode($site_data));
 
         WP_CLI::log(__('Exporting users...', 'rrze-cli'));
-        $this->users(array($users_file), $users_assoc_args, $verbose);
+        $this->users([$users_file], $users_assoc_args, $verbose);
 
         WP_CLI::log(__('Exporting tables...', 'rrze-cli'));
-        $this->tables(array($tables_file), $tables_assoc_args, $verbose);
+        $this->tables([$tables_file], $tables_assoc_args, $verbose);
 
-        // Removing previous $zip_file, if any.
+        // Remove any previous archive with same path to avoid appending.
         if (file_exists($zip_file)) {
             unlink($zip_file);
         }
 
+        // Map archive paths (keys) to source filesystem paths (values).
         $files_to_zip = [
             $users_file     => ABSPATH . $users_file,
             $tables_file    => ABSPATH . $tables_file,
@@ -138,7 +161,8 @@ class Export extends Command
             WP_CLI::log(__('Including themes directory...', 'rrze-cli'));
             $theme_dir = get_template_directory();
             $files_to_zip['wp-content/themes/' . basename($theme_dir)] = $theme_dir;
-            if (get_template_directory() !== get_stylesheet_directory()) {
+
+            if ($theme_dir !== get_stylesheet_directory()) {
                 $child_theme_dir = get_stylesheet_directory();
                 $files_to_zip['wp-content/themes/' . basename($child_theme_dir)] = $child_theme_dir;
             }
@@ -153,16 +177,11 @@ class Export extends Command
         WP_CLI::log(__('Zipping files...', 'rrze-cli'));
         Utils::zip($zip_file, $files_to_zip);
 
-        if (file_exists($users_file)) {
-            unlink($users_file);
-        }
-
-        if (file_exists($tables_file)) {
-            unlink($tables_file);
-        }
-
-        if (file_exists($meta_data_file)) {
-            unlink($meta_data_file);
+        // Cleanup temp files.
+        foreach ([$users_file, $tables_file, $meta_data_file] as $tmp) {
+            if (file_exists($tmp)) {
+                unlink($tmp);
+            }
         }
 
         if (file_exists($zip_file)) {
@@ -179,21 +198,21 @@ class Export extends Command
     }
 
     /**
-     * Exports the database tables of a website.
-     * 
+     * Export database tables of a website.
+     *
      * ## OPTIONS
      *
      * [<outputfile>]
      * : The name of the exported SQL file.
-     * 
+     *
      * [--tables=<table_list>]
      * : Comma-separated list of tables to be exported.
-     * 
+     *
      * [--custom-tables=<custom_table_list>]
      * : Comma-separated list of non-standard tables to be exported.
-     * 
+     *
      * ## EXAMPLES
-     * 
+     *
      *     # Exports all standard tables of a website to a sql file.
      *     $ wp rrze-migration export tables [--url=website-url]
      *
@@ -224,16 +243,17 @@ class Export extends Command
 
         $url = get_home_url();
 
+        // Build list of tables to export.
         if (empty($this->assoc_args['tables']) && empty($this->assoc_args['custom-tables'])) {
             if (is_multisite()) {
-                // Multisite: Export only tables with the current blog prefix (e.g., wp_3_)
-                $assoc_args = ['format' => 'csv', 'all-tables-with-prefix' => 1];
-                $tables_result = Utils::runcommand('db tables', [], $assoc_args, ['url' => $url]);
+                // Multisite: Export only tables with the current blog prefix (e.g., wp_3_).
+                $tables_result = Utils::runcommand('db tables', [], ['format' => 'csv', 'all-tables-with-prefix' => 1], ['url' => $url]);
 
                 if ($tables_result->return_code === 0) {
                     $all_tables = explode(',', $tables_result->stdout);
                     $prefix = $wpdb->prefix;
-                    // Filter tables to include only those with the current blog's prefix
+
+                    // Filter by current blog prefix.
                     $tables = array_filter($all_tables, function ($table) use ($prefix) {
                         return strpos($table, $prefix) === 0;
                     });
@@ -241,9 +261,8 @@ class Export extends Command
                     WP_CLI::error(__('Could not retrieve the list of tables.', 'rrze-cli'));
                 }
             } else {
-                // Single site: Export all tables in the database (no prefix filtering)
-                $assoc_args = ['format' => 'csv'];
-                $tables_result = Utils::runcommand('db tables', [], $assoc_args, ['url' => $url]);
+                // Single site: Export all tables in the database (no prefix filtering).
+                $tables_result = Utils::runcommand('db tables', [], ['format' => 'csv'], ['url' => $url]);
 
                 if ($tables_result->return_code === 0) {
                     $tables = explode(',', $tables_result->stdout);
@@ -252,7 +271,7 @@ class Export extends Command
                 }
             }
         } else {
-            // If user specified tables or custom-tables, use exactly those
+            // If user specified tables or custom-tables, use exactly those.
             $tables = [];
             if (!empty($this->assoc_args['tables'])) {
                 $tables = explode(',', $this->assoc_args['tables']);
@@ -264,7 +283,8 @@ class Export extends Command
         }
 
         if (is_array($tables) && !empty($tables)) {
-            $export = Utils::runcommand('db export', [$filename], ['tables' => implode(',', $tables)]);
+            // Pass URL for consistency with previous calls.
+            $export = Utils::runcommand('db export', [$filename], ['tables' => implode(',', $tables)], ['url' => $url]);
 
             if (0 === $export->return_code) {
                 $this->success(__('The export is now complete', 'rrze-cli'), $verbose);
@@ -277,23 +297,26 @@ class Export extends Command
     }
 
     /**
-     * Exports all users to a CSV file.
+     * Export all users to a CSV file.
      *
      * ## OPTIONS
      *
      * [<outputfile>]
      * : The name of the exported CSV file.
-     * 
+     *
      * [--woocomerce]
-     * : Include all wc_customer_user (if WooCommerce is installed).
-     * 
+     * : (Deprecated/unused) Previously intended to include WC customer-only users.
+     *
      * [--usersuffix=<string>]
      * : Optional. Suffix to append to the `user_login` field in the CSV export.
-     * 
+     *
+     * [--usersuffixtrim=<string>]
+     * : Optional. Suffix to trim from the `user_login` field if present (e.g. "@fau.de").
+     *
      * ## EXAMPLES
-     * 
-     *     # Exports all website users and wc_customer_user with ID=2 to a CSV file.
-     *     $ wp rrze-migration export users --woocomerce [--url=website-url]
+     *
+     *     # Exports all website users to a CSV file.
+     *     $ wp rrze-migration export users [--url=website-url]
      *
      * @param array $args
      * @param array $assoc_args
@@ -301,7 +324,7 @@ class Export extends Command
      */
     public function users($args = [], $assoc_args = [], $verbose = true)
     {
-        $blogId = get_current_blog_id();
+        $blogId = isset($assoc_args['blog_id']) ? (int) $assoc_args['blog_id'] : get_current_blog_id();
 
         $this->process_args(
             [
@@ -309,13 +332,22 @@ class Export extends Command
             ],
             $args,
             [
-                'woocomerce' => false,
-                'usersuffix' => '',
+                'woocomerce'     => false, // kept for backward compatibility; currently unused
+                'usersuffix'     => '',
+                'usersuffixtrim' => '',
             ],
             $assoc_args
         );
 
-        $usersuffix = isset($this->assoc_args['usersuffix']) ? $this->assoc_args['usersuffix'] : '';
+        // Normalize provided suffixes.
+        $usersuffix     = isset($this->assoc_args['usersuffix']) ? trim($this->assoc_args['usersuffix']) : '';
+        $usersuffixtrim = isset($this->assoc_args['usersuffixtrim']) ? trim($this->assoc_args['usersuffixtrim']) : '';
+        $norm_add       = $this->normalize_suffix($usersuffix);
+        $norm_trim      = $this->normalize_suffix($usersuffixtrim);
+
+        if ($norm_add !== '' && $norm_trim !== '' && $norm_add === $norm_trim) {
+            WP_CLI::warning(__('--usersuffix and --usersuffixtrim are identical; no suffix will be appended after trimming.', 'rrze-cli'));
+        }
 
         $filename  = $this->args[0];
         $delimiter = ',';
@@ -329,24 +361,29 @@ class Export extends Command
         $headers = self::getUserCSVHeaders();
 
         $users_args = [
-            'fields' => 'all',
+            'fields'  => 'all',
+            'blog_id' => $blogId,
         ];
 
-        $users_args['blog_id'] = $blogId;
-
-        $count = 0;
-        $users = get_users($users_args);
+        $count         = 0;
+        $users         = get_users($users_args);
         $user_data_arr = [];
 
-        // This first foreach will find all users meta stored in the usersmeta table.
+        // First pass: assemble each user's base data + filtered meta.
         foreach ($users as $user) {
             $role = isset($user->roles[0]) ? $user->roles[0] : '';
 
+            // Start with raw login.
             $user_login = $user->data->user_login;
-            if (!empty($usersuffix) && substr($usersuffix, 0, 1) === '@') {
-                if (strpos($user_login, '@') === false) {
-                    $user_login .= $usersuffix;
-                }
+
+            // 1) Trim suffix if requested and present at the end.
+            if ($norm_trim !== '' && $this->ends_with($user_login, $norm_trim)) {
+                $user_login = substr($user_login, 0, -strlen($norm_trim));
+            }
+
+            // 2) Append suffix if requested and there is no '@' already.
+            if ($norm_add !== '' && strpos($user_login, '@') === false) {
+                $user_login .= $norm_add;
             }
 
             $user_data = [
@@ -362,7 +399,7 @@ class Export extends Command
                 $user->data->user_status,
                 $user->data->display_name,
 
-                // User Meta.
+                // User Meta (common keys).
                 $user->get('first_name'),
                 $user->get('last_name'),
                 $user->get('nickname'),
@@ -371,44 +408,36 @@ class Export extends Command
                 $user->get('_application_passwords'),
             ];
 
-            // Keeping arrays consistent, not all users have the same meta, so it's possible to have some users who
-            // don't even have a given meta key. It must be ensured that these users have an empty column for these fields.
+            // Keep array length consistent with headers (pre-fill).
             if (count($headers) - count($user_data) > 0) {
                 $user_temp_data_arr = array_fill(0, count($headers) - count($user_data), '');
                 $user_data = array_merge($user_data, $user_temp_data_arr);
             }
 
+            // Map to associative array using headers as keys (order matters).
             $user_data = array_combine($headers, $user_data);
 
+            // Load all user meta to be filtered against headers.
             $user_meta = get_user_meta($user->data->ID);
             $meta_keys = array_keys($user_meta);
 
-            // Removing all unwanted meta keys.
+            // Remove all meta keys not listed in headers (avoid leaking unrelated meta).
             foreach ($meta_keys as $user_meta_key) {
-                $can_add = true;
-
-                // Checking for unwanted meta keys.
                 if (!in_array($user_meta_key, $headers, true)) {
-                    $can_add = false;
-                }
-
-                if (!$can_add) {
                     unset($user_meta[$user_meta_key]);
                 }
             }
 
-            // Get the meta keys again.
-            $meta_keys = array_keys($user_meta);
-
-            foreach ($meta_keys as $user_meta_key) {
+            // Re-add kept meta into the row.
+            foreach (array_keys($user_meta) as $user_meta_key) {
                 $value = $user_meta[$user_meta_key];
 
-                // Get_user_meta always return an array when no $key is passed.
-                if (is_array($value) && 1 === count($value)) {
+                // get_user_meta() returns arrays for multi values; flatten if simple.
+                if (is_array($value) && count($value) === 1) {
                     $value = $value[0];
                 }
 
-                // If it's still an array or object, then we need to serialize.
+                // Serialize arrays/objects to keep CSV single-cell semantics.
                 if (is_array($value) || is_object($value)) {
                     $value = serialize($value);
                 }
@@ -419,7 +448,7 @@ class Export extends Command
             /**
              * Filters the default set of user data to be exported/imported.
              *
-             * @param array
+             * @param array    $data The row array keyed by headers.
              * @param \WP_User $user The user object.
              */
             $custom_user_data = apply_filters('rrze_migration_export_user_data', [], $user);
@@ -428,6 +457,14 @@ class Export extends Command
                 $user_data = array_merge($user_data, $custom_user_data);
             }
 
+            // Ensure every header key exists in the row (fill missing with empty string).
+            foreach ($headers as $h) {
+                if (!array_key_exists($h, $user_data)) {
+                    $user_data[$h] = '';
+                }
+            }
+
+            // Sanity check: row length must match headers length.
             if (count(array_values($user_data)) !== count($headers)) {
                 WP_CLI::error(__('The headers and data length are not matching', 'rrze-cli'));
             }
@@ -436,15 +473,16 @@ class Export extends Command
             $count++;
         }
 
-        // Once all the meta keys of the users are obtained, everything can be saved in a csv file.
+        // Write headers first.
         fputcsv($file_handler, $headers, $delimiter);
 
+        // Then write rows in header order.
         foreach ($user_data_arr as $user_data) {
-            if (count($headers) - count($user_data) > 0) {
-                $user_temp_data_arr = array_fill(0, count($headers) - count($user_data), '');
-                $user_data = array_merge(array_values($user_data), $user_temp_data_arr);
+            $ordered = [];
+            foreach ($headers as $h) {
+                $ordered[] = array_key_exists($h, $user_data) ? $user_data[$h] : '';
             }
-            fputcsv($file_handler, $user_data, $delimiter);
+            fputcsv($file_handler, $ordered, $delimiter);
         }
 
         fclose($file_handler);
@@ -479,7 +517,7 @@ class Export extends Command
             'user_status',
             'display_name',
 
-            // User Meta.
+            // User Meta (common subset).
             'first_name',
             'last_name',
             'nickname',
@@ -500,5 +538,40 @@ class Export extends Command
         }
 
         return $headers;
+    }
+
+    /**
+     * Normalize a suffix so it always starts with '@' (if not empty).
+     *
+     * @param string $suffix
+     * @return string
+     */
+    private function normalize_suffix(string $suffix): string
+    {
+        $suffix = trim($suffix);
+        if ($suffix === '') {
+            return '';
+        }
+        return $suffix[0] === '@' ? $suffix : '@' . $suffix;
+    }
+
+    /**
+     * Polyfill-safe ends_with check for PHP 7.4+ compatibility.
+     *
+     * @param string $haystack
+     * @param string $needle
+     * @return bool
+     */
+    private function ends_with(string $haystack, string $needle): bool
+    {
+        if ($needle === '') {
+            return false;
+        }
+        $lenHay = strlen($haystack);
+        $lenNee = strlen($needle);
+        if ($lenNee > $lenHay) {
+            return false;
+        }
+        return substr($haystack, -$lenNee) === $needle;
     }
 }
