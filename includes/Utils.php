@@ -17,474 +17,304 @@ use PhpZip\Exception\ZipException;
 class Utils
 {
     /**
-     * Check whether a file is a ZIP archive by reading its magic numbers.
-     * 
-     * @param string $filename Path to the file to check.
-     * @return bool True if the file is a ZIP archive, false otherwise.
+     * Checks if $filename is a zip file by checking it's first few bytes sequence.
+     *
+     * @param string $filename
+     * @return bool
      */
-    public static function is_zip_file(string $filename): bool
+    public static function is_zip_file($filename)
     {
-        if (!is_file($filename) || !is_readable($filename)) {
-            return false;
-        }
-        clearstatcache(true, $filename);
-        $fh = @fopen($filename, 'rb');
+        $fh = fopen($filename, 'r');
+
         if (!$fh) {
             return false;
         }
-        $sig = @fread($fh, 4);
-        @fclose($fh);
-        if ($sig === false || strlen($sig) < 4) {
+
+        $blob = fgets($fh, 5);
+
+        fclose($fh);
+
+        if (strpos($blob, 'PK') !== false) {
+            return true;
+        } else {
             return false;
         }
-        // Magic numbers: LFH, EOCD (empty), spanning marker.
-        return in_array($sig, ["\x50\x4B\x03\x04", "\x50\x4B\x05\x06", "\x50\x4B\x07\x08"], true);
     }
 
     /**
-     * Parse a URL into a normalized host+path string for search-replace operations.
-     * Omits scheme, query, fragment; normalizes case and slashes.
-     * Returns empty string on parse failure.
-     * 
-     * @param string $url The URL to parse.
-     * @return string Normalized host+path string, or empty string on failure.
+     * Parses a url for use in search-replace by removing its scheme.
+     *
+     * @param string $url
+     * @return string
      */
-    public static function parse_url_for_search_replace(string $url): string
+    public static function parse_url_for_search_replace($url)
     {
-        // Accept bare hosts like "example.com/foo" by prefixing a dummy scheme.
-        if (!preg_match('#^[a-z][a-z0-9+\-.]*://#i', $url)) {
-            $url = 'http://' . ltrim($url, '/');
-        }
+        $parsed_url = parse_url(esc_url($url));
+        $path = isset($parsed_url['path']) ? $parsed_url['path'] : '';
 
-        $parts = function_exists('wp_parse_url') ? wp_parse_url($url) : parse_url($url);
-        if (!$parts || empty($parts['host'])) {
-            return '';
-        }
-
-        $host = strtolower($parts['host']);
-        // IPv6 host normalization with port -> wrap in [].
-        $is_ipv6 = strpos($host, ':') !== false;
-        if (isset($parts['port'])) {
-            $host = $is_ipv6 ? "[{$host}]" : $host;
-            $host .= ':' . (int) $parts['port'];
-        }
-
-        $path = $parts['path'] ?? '';
-        $path = preg_replace('#//+#', '/', $path);
-        if ($path !== '/' && substr($path, -1) === '/') {
-            $path = rtrim($path, '/');
-        }
-
-        return $host . $path;
+        return $parsed_url['host'] . $path;
     }
 
     /**
-     * Recursively delete a folder and its contents.
-     * 
-     * @param string $dirPath Path to the directory to delete.
-     * @param bool $deleteParent Whether to delete the parent directory itself. Defaults to true.
-     * @throws \RuntimeException If unable to delete files or directories.
-     * @return void
+     * Recursively removes a directory and its files.
+     *
+     * @param string $dirPath
+     * @param bool   $deleteParent
      */
-    public static function delete_folder(string $dirPath, bool $deleteParent = true): void
+    public static function delete_folder($dirPath, $deleteParent = true)
     {
-        if (!is_dir($dirPath)) {
-            return;
-        }
+        $limit = 0;
+        while (file_exists($dirPath) && $limit++ < 10) {
+            foreach (
+                new \RecursiveIteratorIterator(
+                    new \RecursiveDirectoryIterator($dirPath, \FilesystemIterator::SKIP_DOTS),
+                    \RecursiveIteratorIterator::CHILD_FIRST
+                ) as $path
+            ) {
+                $path->isFile() ? @unlink($path->getPathname()) : @rmdir($path->getPathname());
+            }
 
-        $it = new \RecursiveDirectoryIterator(
-            $dirPath,
-            \FilesystemIterator::SKIP_DOTS
-            // We *do not* follow symlinks to avoid accidental traversal.
-        );
-        $ri = new \RecursiveIteratorIterator($it, \RecursiveIteratorIterator::CHILD_FIRST);
-
-        /** @var \SplFileInfo $path */
-        foreach ($ri as $path) {
-            $full = $path->getPathname();
-            if ($path->isLink() || $path->isFile()) {
-                if (!@unlink($full) && file_exists($full)) {
-                    // Try to relax permissions and retry once.
-                    @chmod($full, 0644);
-                    if (!@unlink($full) && file_exists($full)) {
-                        throw new \RuntimeException("Unable to delete file: {$full}");
-                    }
-                }
-            } elseif ($path->isDir()) {
-                if (!@rmdir($full) && is_dir($full)) {
-                    @chmod($full, 0755);
-                    if (!@rmdir($full) && is_dir($full)) {
-                        throw new \RuntimeException("Unable to delete directory: {$full}");
-                    }
-                }
+            if ($deleteParent) {
+                rmdir($dirPath);
             }
         }
-
-        if ($deleteParent) {
-            @rmdir($dirPath);
-        }
     }
 
     /**
-     * Recursively move a folder and its contents to a new location.
-     * 
-     * @param string $source Path to the source directory.
-     * @param string $dest Path to the destination directory.
-     * @throws \InvalidArgumentException If the source is not a directory.
-     * @throws \RuntimeException If unable to move files or directories.
-     * @return void
+     * Recursively copies a directory and its files.
+     *
+     * @param string $source
+     * @param string $dest
      */
-    public static function move_folder(string $source, string $dest): void
+    public static function move_folder($source, $dest)
     {
-        if (!is_dir($source)) {
-            throw new \InvalidArgumentException("Source is not a directory: {$source}");
+        if (!file_exists($dest)) {
+            mkdir($dest);
         }
 
-        // Prevent moving into its own subtree.
-        $srcReal  = rtrim(realpath($source) ?: $source, DIRECTORY_SEPARATOR);
-        $destReal = rtrim($dest, DIRECTORY_SEPARATOR);
-        if (strpos($destReal, $srcReal . DIRECTORY_SEPARATOR) === 0) {
-            throw new \RuntimeException("Destination cannot be inside source ({$dest}).");
-        }
-
-        // Fast path: try a simple rename first (same filesystem).
-        if (@rename($source, $dest)) {
-            return;
-        }
-
-        if (!file_exists($dest) && !mkdir($dest, 0775, true) && !is_dir($dest)) {
-            throw new \RuntimeException("Unable to create destination: {$dest}");
-        }
-
-        $it = new \RecursiveDirectoryIterator($source, \FilesystemIterator::SKIP_DOTS);
-        $ri = new \RecursiveIteratorIterator($it, \RecursiveIteratorIterator::SELF_FIRST);
-
-        foreach ($ri as $item) {
-            /** @var \SplFileInfo $item */
-            $rel      = $it->getSubPathname();
-            $target   = $dest . DIRECTORY_SEPARATOR . $rel;
-            $itemPath = $item->getPathname();
-
+        foreach (
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($source, \RecursiveDirectoryIterator::SKIP_DOTS),
+                \RecursiveIteratorIterator::SELF_FIRST
+            ) as $item
+        ) {
             if ($item->isDir()) {
-                if (!file_exists($target) && !mkdir($target, 0775, true) && !is_dir($target)) {
-                    throw new \RuntimeException("Unable to create directory: {$target}");
+                $dir = $dest . DIRECTORY_SEPARATOR . $iterator->getSubPathName();
+                if (!file_exists($dir)) {
+                    mkdir($dir);
                 }
             } else {
-                $targetDir = dirname($target);
-                if (!file_exists($targetDir) && !mkdir($targetDir, 0775, true) && !is_dir($targetDir)) {
-                    throw new \RuntimeException("Unable to create directory: {$targetDir}");
-                }
-                if (!@rename($itemPath, $target)) {
-                    // Cross-device or permission issue: copy + unlink, preserve perms & mtime.
-                    if (!@copy($itemPath, $target)) {
-                        throw new \RuntimeException("Unable to copy file: {$itemPath} -> {$target}");
-                    }
-                    @chmod($target, @fileperms($itemPath) & 0777);
-                    @touch($target, @filemtime($itemPath) ?: time());
-                    if (!@unlink($itemPath)) {
-                        throw new \RuntimeException("Unable to unlink source: {$itemPath}");
-                    }
+                $dest_file = $dest . DIRECTORY_SEPARATOR . $iterator->getSubPathName();
+                if (!file_exists($dest_file)) {
+                    rename($item, $dest_file);
                 }
             }
         }
-
-        self::delete_folder($source, true);
     }
 
     /**
-     * Get the database table prefix for a given blog ID in multisite.
-     * 
-     * @param int $blog_id The blog ID.
-     * @return string The database table prefix for the specified blog.
+     * Retrieves the db prefix based on the $blog_id.
+     *
+     * @uses wpdb
+     *
+     * @param int $blog_id
+     * @return string
      */
-    public static function get_db_prefix(int $blog_id): string
+    public static function get_db_prefix($blog_id)
     {
         global $wpdb;
-        if (method_exists($wpdb, 'get_blog_prefix')) {
-            return $wpdb->get_blog_prefix($blog_id);
+
+        if ($blog_id > 1) {
+            $new_db_prefix = $wpdb->base_prefix . $blog_id . '_';
+        } else {
+            $new_db_prefix = $wpdb->prefix;
         }
-        return ($blog_id > 1) ? $wpdb->base_prefix . $blog_id . '_' : $wpdb->prefix;
+
+        return $new_db_prefix;
     }
 
     /**
-     * Assign a role to a user on a target blog by writing capabilities meta.
-     * Merges with existing caps to avoid nuking custom capabilities.
-     * 
-     * @param int $blog_id The blog ID.
-     * @param int $user_id The user ID.
-     * @param string $role The role to assign.
-     * @return true|\WP_Error True on success, WP_Error on failure.
+     * Does the same thing that add_user_to_blog does, but without calling switch_to_blog().
+     *
+     * @param int    $blog_id
+     * @param int    $user_id
+     * @param string $role
+     * @return \WP_Error
      */
-    public static function light_add_user_to_blog(int $blog_id, int $user_id, string $role)
+    public static function light_add_user_to_blog($blog_id, $user_id, $role)
     {
         $user = get_userdata($user_id);
+
         if (!$user) {
+            restore_current_blog();
             return new \WP_Error('user_does_not_exist', __('The requested user does not exist.'));
         }
 
-        $details = get_blog_details($blog_id);
-        if (!$details) {
-            return new \WP_Error('blog_does_not_exist', __('The requested site does not exist.'));
-        }
-
-        $wp_role = get_role($role);
-        if (!$wp_role) {
-            return new \WP_Error('invalid_role', sprintf(__('Invalid role: %s'), $role));
-        }
-
-        $prefix     = self::get_db_prefix($blog_id);
-        $caps_key   = $prefix . 'capabilities';
-        $level_key  = $prefix . 'user_level';
-
-        // Merge with existing capabilities for that blog.
-        $existing_caps = get_user_meta($user_id, $caps_key, true);
-        if (!is_array($existing_caps)) {
-            $existing_caps = [];
-        }
-        // Clear other roles (WordPress expects one role per blog), keep non-role caps.
-        foreach (array_keys($existing_caps) as $k) {
-            if (strpos($k, 'level_') === 0) {
-                unset($existing_caps[$k]);
-            }
-        }
-        $caps = array_merge($existing_caps, [$role => true]);
-        update_user_meta($user_id, $caps_key, $caps);
-
-        // Derive user_level (legacy) from role.
-        $user_level = 0;
-        foreach ($wp_role->capabilities as $cap => $grant) {
-            if ($grant && preg_match('/^level_(\d+)$/', $cap, $m)) {
-                $user_level = max($user_level, (int) $m[1]);
-            }
-        }
-        update_user_meta($user_id, $level_key, $user_level);
-
         if (!get_user_meta($user_id, 'primary_blog', true)) {
             update_user_meta($user_id, 'primary_blog', $blog_id);
+            $details = get_blog_details($blog_id);
             update_user_meta($user_id, 'source_domain', $details->domain);
         }
 
+        $user->set_role($role);
+
+        /**
+         * Fires immediately after a user is added to a site.
+         *
+         * @param int    $user_id User ID.
+         * @param string $role    User role.
+         * @param int    $blog_id Blog ID.
+         */
         do_action('add_user_to_blog', $user_id, $role, $blog_id);
-
-        // Better than wp_cache_delete on raw groups.
-        if (function_exists('clean_user_cache')) {
-            clean_user_cache($user_id);
-        } else {
-            wp_cache_delete($user_id, 'users');
-        }
+        wp_cache_delete($user_id, 'users');
         wp_cache_delete($blog_id . '_user_count', 'blog-details');
-
-        return true;
     }
 
     /**
-     * Clear WordPress object cache, query log, and lazy term meta callbacks.
-     * Useful between operations in long-running WP-CLI processes.
-     * 
-     * @return void
+     * Frees up object cache memory for long running processes.
      */
-    public static function delete_object_cache(): void
+    public static function delete_object_cache()
     {
         global $wpdb, $wp_actions, $wp_filter, $wp_object_cache;
 
-        if (isset($wpdb->queries)) {
-            $wpdb->queries = [];
-        }
-
-        // Keep a bounded history of actions instead of wiping completely.
-        if (is_array($wp_actions) && count($wp_actions) > 200) {
-            $wp_actions = array_slice($wp_actions, -100, null, true);
-        }
+        // Reset queries
+        $wpdb->queries = [];
+        // Prevent wp_actions from growing out of control
+        $wp_actions = [];
 
         if (is_object($wp_object_cache)) {
-            // Prefer runtime-flush if available (doesn't touch persistent backends cluster-wide).
-            if (method_exists($wp_object_cache, 'flush_runtime')) {
-                $wp_object_cache->flush_runtime();
-            } else {
-                $wp_object_cache->group_ops      = [];
-                $wp_object_cache->stats          = [];
-                $wp_object_cache->memcache_debug = [];
-                $wp_object_cache->cache          = [];
-                if (method_exists($wp_object_cache, '__remoteset')) {
-                    $wp_object_cache->__remoteset();
-                }
+            $wp_object_cache->group_ops      = [];
+            $wp_object_cache->stats          = [];
+            $wp_object_cache->memcache_debug = [];
+            $wp_object_cache->cache          = [];
+
+            if (method_exists($wp_object_cache, '__remoteset')) {
+                $wp_object_cache->__remoteset();
             }
         }
 
-        // Detach lazy term meta callbacks added dynamically.
+        /*
+         * The WP_Query class hooks a reference to one of its own methods
+         * onto filters if update_post_term_cache or update_post_meta_cache are true, 
+         * which prevents PHP's garbage collector from cleaning up the WP_Query 
+         * instance on long-running processes.
+         *
+         * By manually removing these callbacks (often created by things
+         * like get_posts()), we're able to properly unallocate memory
+         * once occupied by a WP_Query object.
+         *
+         */
         if (isset($wp_filter['get_term_metadata'])) {
-            $hookObj = $wp_filter['get_term_metadata'];
-            $callbacks = (class_exists('WP_Hook') && $hookObj instanceof \WP_Hook)
-                ? $hookObj->callbacks
-                : $hookObj;
+            /*
+             * WP >= 4.7 has a new WP_Hook class.
+             */
+            if (class_exists('WP_Hook') && $wp_filter['get_term_metadata'] instanceof \WP_Hook) {
+                $filter_callbacks = &$wp_filter['get_term_metadata']->callbacks;
+            } else {
+                $filter_callbacks = &$wp_filter['get_term_metadata'];
+            }
 
-            if (isset($callbacks[10])) {
-                foreach (array_keys($callbacks[10]) as $hook) {
-                    if (preg_match('#^[0-9a-f]{32}lazyload_term_meta$#', (string) $hook)) {
-                        unset($callbacks[10][$hook]);
+            if (isset($filter_callbacks[10])) {
+                foreach ($filter_callbacks[10] as $hook => $content) {
+                    if (preg_match('#^[0-9a-f]{32}lazyload_term_meta$#', $hook)) {
+                        unset($filter_callbacks[10][$hook]);
                     }
                 }
             }
-
-            if (class_exists('WP_Hook') && $hookObj instanceof \WP_Hook) {
-                $wp_filter['get_term_metadata']->callbacks = $callbacks;
-            } else {
-                $wp_filter['get_term_metadata'] = $callbacks;
-            }
         }
     }
 
     /**
-     * Wrap SQL dump file contents in a transaction (START TRANSACTION; ... COMMIT;).
-     * Skips gzipped files and files already containing a transaction.
-     * 
-     * @param string $orig_filename Path to the original SQL dump file.
-     * @throws \RuntimeException If unable to read/write files.
-     * @return void
+     * Add START TRANSACTION and COMMIT to the sql export.
+     *
+     * @param string $orig_filename SQL dump file name.
      */
-    public static function addTransaction(string $orig_filename): void
+    public static function addTransaction($orig_filename)
     {
-        // Quick guards: ignore gzipped dumps.
-        if (preg_match('/\.(sql\.gz|gz)$/i', $orig_filename)) {
-            WP_CLI::warning('addTransaction skipped: gzip-compressed dump.');
-            return;
-        }
+        $context   = stream_context_create();
+        $orig_file = fopen($orig_filename, 'r', 1, $context);
 
-        $in = @fopen($orig_filename, 'rb');
-        if (!$in) {
-            throw new \RuntimeException("Unable to open SQL file: {$orig_filename}");
-        }
+        $temp_filename = tempnam(sys_get_temp_dir(), 'php_prepend_');
+        file_put_contents($temp_filename, 'START TRANSACTION;' . PHP_EOL);
+        file_put_contents($temp_filename, $orig_file, FILE_APPEND);
+        file_put_contents($temp_filename, 'COMMIT;', FILE_APPEND);
 
-        // Avoid double-wrapping: peek first KB for START TRANSACTION;
-        $head = @fread($in, 1024) ?: '';
-        if (stripos($head, 'START TRANSACTION') !== false) {
-            fclose($in);
-            return;
-        }
-        // Rewind after peek.
-        rewind($in);
-
-        $tmp = tempnam(sys_get_temp_dir(), 'php_prepend_');
-        $out = @fopen($tmp, 'wb');
-        if (!$out) {
-            fclose($in);
-            throw new \RuntimeException("Unable to open temp file: {$tmp}");
-        }
-
-        fwrite($out, "START TRANSACTION;\n");
-        stream_copy_to_stream($in, $out);
-        fwrite($out, "\nCOMMIT;\n");
-
-        fclose($in);
-        fclose($out);
-
-        if (!@unlink($orig_filename) || !@rename($tmp, $orig_filename)) {
-            @unlink($tmp);
-            throw new \RuntimeException("Unable to replace original SQL file: {$orig_filename}");
-        }
+        fclose($orig_file);
+        unlink($orig_filename);
+        rename($temp_filename, $orig_filename);
     }
 
     /**
-     * Switch to a given blog in multisite if not already on it.
-     * 
-     * @param int $blog_id The blog ID to switch to.
-     * @return void
+     * Switches to another blog if on Multisite
+     *
+     * @param $blog_id
      */
-    public static function maybe_switch_to_blog(int $blog_id): void
+    public static function maybe_switch_to_blog($blog_id)
     {
-        if (is_multisite() && get_current_blog_id() !== $blog_id) {
+        if (is_multisite()) {
             switch_to_blog($blog_id);
         }
     }
 
     /**
-     * Restore to the previous blog in multisite if applicable.
-     * 
-     * @return void
+     * Restore the current blog if on multisite
      */
-    public static function maybe_restore_current_blog(): void
+    public static function maybe_restore_current_blog()
     {
         if (is_multisite()) {
             restore_current_blog();
         }
     }
 
+
     /**
-     * Extract a ZIP archive to a destination directory with zip-slip protection.
-     * 
-     * @param string $filename Path to the ZIP archive.
-     * @param string $dest_dir Path to the destination directory.
-     * @throws \RuntimeException If unable to create destination directory.
-     * @return void
+     * Extracts a zip file to the $dest_dir.
+     *
+     * @param string $filename
+     * @param string $dest_dir
      */
-    public static function extract(string $filename, string $dest_dir): void
+    public static function extract($filename, $dest_dir)
     {
-        if (!file_exists($dest_dir) && !mkdir($dest_dir, 0775, true) && !is_dir($dest_dir)) {
-            throw new \RuntimeException("Unable to create destination: {$dest_dir}");
+        if (!file_exists($dest_dir)) {
+            mkdir($dest_dir);
         }
 
-        $zipFile = new ZipFile();
+        $zipFile = new \PhpZip\ZipFile();
         try {
-            $zipFile->openFile($filename);
-
-            // Zip-slip guard: inspect entry names before extraction.
-            foreach ($zipFile->getListFiles() as $entry) {
-                // Reject absolute paths or parent directory traversal.
-                if (strpos($entry, "\0") !== false || str_starts_with($entry, '/') || str_contains($entry, '..' . '/')) {
-                    throw new ZipException("Unsafe entry path detected: {$entry}");
-                }
-            }
-
-            $zipFile->extractTo($dest_dir)->close();
+            $zipFile
+                ->openFile($filename) // open archive from file
+                ->extractTo($dest_dir) // extract files to the specified directory    
+                ->close(); // close archive  
         } catch (ZipException $e) {
-            WP_CLI::warning(sprintf('Zip extract failed: %s', $e->getMessage()));
+            // handle exception
         } finally {
             $zipFile->close();
         }
     }
 
     /**
-     * Create a ZIP archive with provided files/directories.
-     * Array keys are archive paths (use forward slashes), values are source paths.
-     * 
-     * @param string $zip_file Path to the output ZIP archive.
-     * @param array $files_to_zip Associative array of archive paths to source paths.
-     * @throws \RuntimeException If unable to create zip directory.
+     * Creates a zip files with the provided files/folder to zip
+     *
+     * @param string $zip_files    The name of the zip file
+     * @param array  $files_to_zip The files to include in the zip file
+     *
      * @return void
      */
-    public static function zip(string $zip_file, array $files_to_zip): void
+    public static function zip($zip_file, $files_to_zip)
     {
-        $zipDir = dirname($zip_file);
-        if (!is_dir($zipDir) && !mkdir($zipDir, 0775, true) && !is_dir($zipDir)) {
-            throw new \RuntimeException("Unable to create zip directory: {$zipDir}");
-        }
-
+        // create new archive
         $zipFile = new ZipFile();
         try {
-            foreach ($files_to_zip as $archivePath => $src) {
-                // Normalize archive path to forward slashes and strip leading slashes.
-                $archivePath = ltrim(str_replace(DIRECTORY_SEPARATOR, '/', $archivePath), '/');
-
-                if (!file_exists($src)) {
-                    WP_CLI::warning("Path not found, skipping: {$src}");
+            foreach ($files_to_zip as $key => $file) {
+                if (is_dir($file)) {
+                    $zipFile->addDirRecursive($file, $key); // add a directory and all its contents
                     continue;
                 }
-
-                if (is_dir($src)) {
-                    $zipFile->addDirRecursive($src, $archivePath);
-                } else {
-                    if (!is_readable($src)) {
-                        WP_CLI::warning("Unreadable file, skipping: {$src}");
-                        continue;
-                    }
-                    $zipFile->addFile($src, $archivePath);
-                }
+                $zipFile->addFile($file, $key); // add an entry from the file
             }
-
-            // Optional: set compression level if supported by backend.
-            // $zipFile->setCompressionLevel(\PhpZip\Constants\ZipCompressionLevel::MAXIMUM);
-
-            $zipFile->saveAsFile($zip_file)->close();
+            $zipFile
+                ->saveAsFile($zip_file) // save the archive to a file
+                ->close(); // close archive
         } catch (ZipException $e) {
             WP_CLI::warning($e->getMessage());
         } finally {
@@ -493,92 +323,46 @@ class Utils
     }
 
     /**
-     * Run a WP-CLI subcommand and return its full result using the current PHP process.
-     * 
-     * @param string $command The WP-CLI command to run (e.g., 'plugin install').
-     * @param array $args Positional arguments for the command.
-     * @param array $assoc_args Associative arguments for the command.
-     * @param array $global_args Global arguments for WP-CLI.
-     * @return array The full result of the command execution.
+     * Run a command within WP_CLI
+     *
+     * @param string $command     The command to run
+     * @param array  $args        The command arguments
+     * @param array  $assoc_args  The associative arguments
+     * @param array  $global_args The global arguments
+     *
+     * @return
      */
-    public static function runcommand(string $command, array $args = [], array $assoc_args = [], array $global_args = [])
+    public static function runcommand($command, $args = [], $assoc_args = [], $global_args = [])
     {
         $assoc_args = array_merge($assoc_args, $global_args);
 
-        // Positional args: quote when whitespace; escape embedded quotes.
-        $positional = array_map(
-            static function ($a): string {
-                $a = (string) $a;
-                if ($a === '') {
-                    return '""';
-                }
-                return preg_match('/\s/', $a)
-                    ? '"' . str_replace('"', '\"', $a) . '"'
-                    : $a;
-            },
-            $args
-        );
+        $transformed_assoc_args = [];
 
-        // Assoc args: bools, arrays, scalars.
-        $kv = [];
-        foreach ($assoc_args as $k => $v) {
-            if (is_bool($v)) {
-                if ($v) {
-                    $kv[] = '--' . $k;
-                }
-                continue;
-            }
-            if (is_array($v)) {
-                foreach ($v as $vv) {
-                    $vv = (string) $vv;
-                    $kv[] = '--' . $k . '=' . (preg_match('/\s/', $vv) ? '"' . str_replace('"', '\"', $vv) . '"' : $vv);
-                }
-                continue;
-            }
-            $v = (string) $v;
-            $kv[] = '--' . $k . '=' . (preg_match('/\s/', $v) ? '"' . str_replace('"', '\"', $v) . '"' : $v);
+        foreach ($assoc_args as $key => $arg) {
+            $transformed_assoc_args[] = '--' . $key . '=' . $arg;
         }
+        $params = sprintf('%s %s', implode(' ', $args), implode(' ', $transformed_assoc_args));
 
-        $params  = trim(implode(' ', array_filter([$command, implode(' ', $positional), implode(' ', $kv)])));
         $options = [
-            'return'     => 'all',
-            'launch'     => false,
-            'exit_error' => false,
+            'return'     => 'all', // Returns all data
+            'launch'     => false, // Do not start a new system process
+            'exit_error' => false, // Prevent WP-CLI from stopping execution on error
         ];
 
-        return WP_CLI::runcommand($params, $options);
+        // error_log(sprintf('%s %s', $command, $params));
+        return WP_CLI::runcommand(sprintf('%s %s', $command, $params), $options);
     }
 
     /**
-     * Check whether WooCommerce is active on this site or network-activated.
-     * 
-     * @return bool True if WooCommerce is active, false otherwise.
+     * Checks if WooCommerce is active.
+     *
+     * @return bool
      */
-    public static function is_woocommerce_active(): bool
+    public static function is_woocommerce_active()
     {
-        // Quick heuristic: class loaded.
-        if (class_exists('WooCommerce')) {
-            return true;
-        }
-
-        // Site-activated.
-        $site_active = in_array(
+        return in_array(
             'woocommerce/woocommerce.php',
-            (array) apply_filters('active_plugins', get_option('active_plugins', [])),
-            true
+            apply_filters('active_plugins', get_option('active_plugins'))
         );
-        if ($site_active) {
-            return true;
-        }
-
-        // Network-activated.
-        if (is_multisite()) {
-            $network = (array) get_site_option('active_sitewide_plugins', []);
-            if (isset($network['woocommerce/woocommerce.php'])) {
-                return true;
-            }
-        }
-
-        return false;
     }
 }
