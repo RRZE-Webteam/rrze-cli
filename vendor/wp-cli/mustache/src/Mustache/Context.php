@@ -17,16 +17,21 @@ class Mustache_Context
     private $stack      = array();
     private $blockStack = array();
 
+    private $buggyPropertyShadowing = false;
+
     /**
      * Mustache rendering Context constructor.
      *
-     * @param mixed $context Default rendering context (default: null)
+     * @param mixed $context                Default rendering context (default: null)
+     * @param bool  $buggyPropertyShadowing See Mustache_Engine::useBuggyPropertyShadowing (default: false)
      */
-    public function __construct($context = null)
+    public function __construct($context = null, $buggyPropertyShadowing = false)
     {
         if ($context !== null) {
             $this->stack = array($context);
         }
+
+        $this->buggyPropertyShadowing = $buggyPropertyShadowing;
     }
 
     /**
@@ -120,18 +125,28 @@ class Mustache_Context
      * ... the `name` value is only searched for within the `child` value of the global Context, not within parent
      * Context frames.
      *
-     * @param string $id Dotted variable selector
+     * @param string $id              Dotted variable selector
+     * @param bool   $strictCallables (default: false)
      *
      * @return mixed Variable value, or '' if not found
      */
-    public function findDot($id)
+    public function findDot($id, $strictCallables = false)
     {
         $chunks = explode('.', $id);
         $first  = array_shift($chunks);
         $value  = $this->findVariableInStack($first, $this->stack);
 
+        // This wasn't really a dotted name, so we can just return the value.
+        if (empty($chunks)) {
+            return $value;
+        }
+
         foreach ($chunks as $chunk) {
-            if ($value === '') {
+            $isCallable = $strictCallables ? (is_object($value) && is_callable($value)) : (!is_string($value) && is_callable($value));
+
+            if ($isCallable) {
+                $value = $value();
+            } elseif ($value === '') {
                 return $value;
             }
 
@@ -223,8 +238,24 @@ class Mustache_Context
                             return $frame->$id;
                         }
 
-                        if ($frame instanceof ArrayAccess && isset($frame[$id])) {
-                            return $frame[$id];
+                        // Preserve backwards compatibility with a property shadowing bug in
+                        // Mustache.php <= 2.14.2
+                        // See https://github.com/bobthecow/mustache.php/pull/410
+                        if ($this->buggyPropertyShadowing) {
+                            if ($frame instanceof ArrayAccess && isset($frame[$id])) {
+                                return $frame[$id];
+                            }
+                        } else {
+                            if (property_exists($frame, $id)) {
+                                $rp = new \ReflectionProperty($frame, $id);
+                                if ($rp->isPublic()) {
+                                    return $frame->$id;
+                                }
+                            }
+
+                            if ($frame instanceof ArrayAccess && $frame->offsetExists($id)) {
+                                return $frame[$id];
+                            }
                         }
                     }
                     break;

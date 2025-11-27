@@ -23,18 +23,20 @@
  */
 class Mustache_Engine
 {
-    const VERSION        = '2.14.2';
-    const SPEC_VERSION   = '1.2.2';
+    const VERSION      = '2.14.2';
+    const SPEC_VERSION = '1.3.0';
 
-    const PRAGMA_FILTERS      = 'FILTERS';
-    const PRAGMA_BLOCKS       = 'BLOCKS';
-    const PRAGMA_ANCHORED_DOT = 'ANCHORED-DOT';
+    const PRAGMA_FILTERS       = 'FILTERS';
+    const PRAGMA_BLOCKS        = 'BLOCKS';
+    const PRAGMA_ANCHORED_DOT  = 'ANCHORED-DOT';
+    const PRAGMA_DYNAMIC_NAMES = 'DYNAMIC-NAMES';
 
     // Known pragmas
     private static $knownPragmas = array(
-        self::PRAGMA_FILTERS      => true,
-        self::PRAGMA_BLOCKS       => true,
-        self::PRAGMA_ANCHORED_DOT => true,
+        self::PRAGMA_FILTERS       => true,
+        self::PRAGMA_BLOCKS        => true,
+        self::PRAGMA_ANCHORED_DOT  => true,
+        self::PRAGMA_DYNAMIC_NAMES => true,
     );
 
     // Template cache
@@ -55,6 +57,7 @@ class Mustache_Engine
     private $strictCallables = false;
     private $pragmas = array();
     private $delimiters;
+    private $buggyPropertyShadowing = false;
 
     // Services
     private $tokenizer;
@@ -216,6 +219,10 @@ class Mustache_Engine
                 $this->pragmas[$pragma] = true;
             }
         }
+
+        if (isset($options['buggy_property_shadowing'])) {
+            $this->buggyPropertyShadowing = (bool) $options['buggy_property_shadowing'];
+        }
     }
 
     /**
@@ -264,6 +271,16 @@ class Mustache_Engine
     public function getCharset()
     {
         return $this->charset;
+    }
+
+    /**
+     * Check whether to use buggy property shadowing.
+     *
+     * See https://github.com/bobthecow/mustache.php/pull/410
+     */
+    public function useBuggyPropertyShadowing()
+    {
+        return $this->buggyPropertyShadowing;
     }
 
     /**
@@ -724,12 +741,12 @@ class Mustache_Engine
      *
      * @return Mustache_Template
      */
-    private function loadSource($source, Mustache_Cache $cache = null)
+    private function loadSource($source, $cache = null)
     {
         $className = $this->getTemplateClassName($source);
 
         if (!isset($this->templates[$className])) {
-            if ($cache === null) {
+            if ($cache === null || ! $cache instanceof Mustache_Cache) {
                 $cache = $this->getCache();
             }
 
