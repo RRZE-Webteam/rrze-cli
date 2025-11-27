@@ -10,20 +10,20 @@
  */
 
 /**
- * Unknown template exception.
+ * Unknown helper exception.
  */
-class Mustache_Exception_UnknownTemplateException extends InvalidArgumentException implements Mustache_Exception
+class Mustache_Exception_UnknownHelperException extends InvalidArgumentException implements Mustache_Exception
 {
-    protected $templateName;
+    protected $helperName;
 
     /**
-     * @param string    $templateName
+     * @param string    $helperName
      * @param Exception $previous
      */
-    public function __construct($templateName, Exception $previous = null)
+    public function __construct($helperName, $previous = null)
     {
-        $this->templateName = $templateName;
-        $message = sprintf('Unknown template: %s', $templateName);
+        $this->helperName = $helperName;
+        $message = sprintf('Unknown helper: %s', $helperName);
         if (version_compare(PHP_VERSION, '5.3.0', '>=')) {
             parent::__construct($message, 0, $previous);
         } else {
@@ -31,8 +31,8 @@ class Mustache_Exception_UnknownTemplateException extends InvalidArgumentExcepti
         }
     }
 
-    public function getTemplateName()
+    public function getHelperName()
     {
-        return $this->templateName;
+        return $this->helperName;
     }
 }
