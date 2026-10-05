@@ -42,7 +42,7 @@ class Utils
     }
 
     /**
-     * Parses a url for use in search-replace by removing its scheme.
+     * Parses a site URL for search-replace without its scheme or trailing slash.
      *
      * @param string $url
      * @return string
@@ -50,7 +50,7 @@ class Utils
     public static function parse_url_for_search_replace($url)
     {
         $parsed_url = parse_url(esc_url($url));
-        $path = isset($parsed_url['path']) ? $parsed_url['path'] : '';
+        $path = isset($parsed_url['path']) ? rtrim($parsed_url['path'], '/') : '';
 
         return $parsed_url['host'] . $path;
     }

@@ -1,0 +1,23 @@
+{
+    "description": "Synthetic identity conflicts for the regression tests in work package 3. These cases are not yet enforced by the importer.",
+    "cases": [
+        {
+            "name": "same_login_different_email",
+            "source": {"ID": 21, "user_login": "sso0001", "user_email": "old.address@company.example"},
+            "target": {"ID": 4, "user_login": "sso0001", "user_email": "sso0001@company.example"}
+        },
+        {
+            "name": "different_login_same_email",
+            "source": {"ID": 22, "user_login": "other01", "user_email": "sso0001@company.example"},
+            "target": {"ID": 4, "user_login": "sso0001", "user_email": "sso0001@company.example"}
+        },
+        {
+            "name": "login_and_email_point_to_different_users",
+            "source": {"ID": 23, "user_login": "sso0001", "user_email": "control01@company.example"},
+            "targets": [
+                {"ID": 4, "user_login": "sso0001", "user_email": "sso0001@company.example"},
+                {"ID": 2, "user_login": "control01", "user_email": "control01@company.example"}
+            ]
+        }
+    ]
+}

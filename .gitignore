@@ -11,6 +11,12 @@ node_modules/
 package-lock.json
 ### Composer ###
 composer.lock
+!tests/composer.lock
+tests/vendor/
+tests/.cache/
+tests/.artifacts/
+tests/.local.json
+.phpunit.cache/
 ### WordPress ###
 *.pot
 *.po~

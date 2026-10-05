@@ -1,0 +1,13 @@
+{
+    "name": "rrze/cli-tests",
+    "description": "Isolated development tools for rrze-cli",
+    "type": "project",
+    "license": "GPL-2.0-or-later",
+    "require-dev": {
+        "phpunit/phpunit": "^11.5"
+    },
+    "config": {
+        "platform": { "php": "8.2.0" },
+        "sort-packages": true
+    }
+}

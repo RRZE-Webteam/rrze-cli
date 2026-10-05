@@ -1,0 +1,4 @@
+{
+    "DB_USER": "your-local-test-database-user",
+    "DB_PASSWORD": "replace-in-your-private-copy"
+}

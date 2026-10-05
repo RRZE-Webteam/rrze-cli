@@ -10,5 +10,13 @@
         "psr-4": {
             "RRZE\\CLI\\": "includes/"
         }
+    },
+    "scripts": {
+        "test:install": "composer --working-dir=tests install --no-interaction --prefer-dist",
+        "test": "@test:unit",
+        "test:unit": "@php tests/vendor/bin/phpunit --configuration phpunit.xml.dist",
+        "test:coverage": "@php -d pcov.enabled=1 tests/vendor/bin/phpunit --configuration phpunit.xml.dist --coverage-text --coverage-clover tests/.artifacts/coverage.xml --coverage-html tests/.artifacts/coverage",
+        "test:integration": "@php tests/vendor/bin/phpunit --configuration tests/phpunit-integration.xml",
+        "test:all": ["@test:unit", "@test:integration"]
     }
 }

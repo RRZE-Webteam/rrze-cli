@@ -1,0 +1,61 @@
+name: Migration tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.2', '8.3', '8.4']
+    services:
+      mysql:
+        image: mysql:8.0.43
+        env:
+          MYSQL_ROOT_PASSWORD: rrze-ci-only
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -prrze-ci-only"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mysqli, mbstring, dom, xml, xmlwriter, zip
+          coverage: pcov
+          tools: composer:v2, wp-cli:2.12.0
+      - name: Install MySQL clients
+        run: sudo apt-get update && sudo apt-get install -y default-mysql-client
+      - name: Install isolated test dependencies
+        run: composer test:install
+      - name: Unit tests and coverage
+        run: composer test:coverage
+      - name: Prepare WordPress template
+        run: |
+          mkdir -p "$RUNNER_TEMP/rrze-wordpress-template"
+          wp core download --version=6.8.3 --path="$RUNNER_TEMP/rrze-wordpress-template"
+          wp config create --path="$RUNNER_TEMP/rrze-wordpress-template" --dbname=unused_template --dbhost=127.0.0.1:3306 --dbuser=root --dbpass=rrze-ci-only --skip-check --skip-salts
+      - name: Integration tests
+        env:
+          RRZE_TEST_WP_ROOT: ${{ runner.temp }}/rrze-wordpress-template
+          RRZE_TEST_MYSQL_BIN: /usr/bin
+        run: composer test:integration -- --log-junit tests/.artifacts/integration/junit.xml
+      - name: Preserve test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-tests-php-${{ matrix.php }}
+          path: tests/.artifacts/
+          if-no-files-found: ignore
+          retention-days: 7

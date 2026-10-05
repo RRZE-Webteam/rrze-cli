@@ -7,7 +7,13 @@ WP-CLI extension for RRZE's CMS management.
 -   PHP >= 8.2
 -   WP-CLI >= 2.11.0
 
+## Tests
+
+Run `composer test:install` once, then `composer test:unit`. Test dependencies are installed separately under `tests/vendor`; the bundled plugin dependencies are not changed. Integration tests use disposable WordPress copies and new databases on the local MySQL server. See [Testing migrations](docs/testing.md) (German) for setup, isolation, coverage and limitations.
+
 ## Migration
+
+The migration overhaul is specified in [Migration scope and safety rules](docs/migration-scope.md) (German). Its required target behavior is to create a new site in a multisite only; any previous target site must first be deleted manually in Network Admin. These requirements are not yet fully enforced by the current implementation described below.
 
 This WP-CLI extension simplifies the process of migrating websites on a WordPress multisite installation. It exports everything to a ZIP package, which can then be automatically imported into the desired multisite installation.
 

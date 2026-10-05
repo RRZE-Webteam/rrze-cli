@@ -1,0 +1,2 @@
+# Never inherit commands, aliases, paths or credentials from a user's WP-CLI config.
+color: false
