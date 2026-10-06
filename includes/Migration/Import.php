@@ -5,811 +5,287 @@ namespace RRZE\CLI\Migration;
 defined('ABSPATH') || exit;
 
 use RRZE\CLI\{Command, Utils};
+use RuntimeException;
 use WP_CLI;
 
-/**
- * Imports users and tables from a CSV file as well as an entire website from a ZIP file.
- *
- * ## EXAMPLES
- *
- *     # Imports an entire website from a ZIP file.
- *     $ wp rrze-migration import all website.zip
- * 
- * @package RRZE\CLI
- */
+/** Imports a controlled export into a newly created multisite site. */
 class Import extends Command
 {
     /**
-     * Imports a new website from a zip package.
-     * 
-     * This command will perform the search-replace as well as
-     * the necessary updates to make the new website work with a multisite instance.
-     * 
+     * Imports a package into a new site. Existing sites must be deleted manually first.
+     *
      * ## OPTIONS
      *
      * <inputfile>
-     * : The name of the exported ZIP file.
-     * 
-     * [--new_url=<new_domain>]
-     * : The new hostname of the website into which the ZIP file content is imported.
-     * 
+     * : Local ZIP package.
+     * [--new_url=<url>]
+     * : Destination URL; defaults to the source URL.
      * [--mysql-single-transaction]
-     * : Wrap the exported SQL in a single transaction.
-     * 
-     * [--uid_fields=<uid_fields>]
-     * : User meta field.
-     * 
+     * : Unsupported: a dump with DDL cannot be made atomic with this option.
+     * [--uid_fields=<fields>]
+     * : Comma-separated post meta keys containing numeric user IDs.
      * [--verbose]
-     * : Display additional details during command execution.
-     * 
-     * ## EXAMPLES
-     * 
-     *  Imports a website from the compressed file website.zip.
-     *  wp rrze-migration import all website.zip [--new_url=website-url]
-     *
-     * @param array $args
-     * @param array $assoc_args
+     * : Show progress details.
      */
     public function all($args = [], $assoc_args = [])
     {
-        $this->process_args(
-            [
-                0 => '', // .zip file to import.
-            ],
-            $args,
-            [
-                'new_url'                  => '',
-                'mysql-single-transaction' => false,
-                'uid_fields'               => '',
-            ],
-            $assoc_args
-        );
-
-        $verbose = false;
-
-        if (isset($assoc_args['verbose'])) {
-            $verbose = true;
+        global $wpdb;
+        if (!is_multisite()) {
+            WP_CLI::error('Migration requires a multisite destination and always creates a new site.');
         }
-
-        $assoc_args = $this->assoc_args;
-
-        $filename = ABSPATH . $this->args[0];
-
-        if (!Utils::is_zip_file($filename)) {
-            WP_CLI::error(__('The provided file does not appear to be a zip file', 'rrze-cli'));
+        $workspace = null;
+        $blogId = null;
+        $lock = null;
+        $error = null;
+        try {
+            if (isset($assoc_args['mysql-single-transaction'])) {
+                throw new RuntimeException('--mysql-single-transaction cannot make a migration with DDL atomic and is no longer supported.');
+            }
+            if (!empty($assoc_args['new_url'])) {
+                $this->assert_available(SiteAddress::parse($assoc_args['new_url']));
+            }
+            $filename = $args[0] ?? '';
+            $filename = str_starts_with($filename, '/') ? $filename : ABSPATH . $filename;
+            if (!Utils::is_zip_file($filename)) {
+                throw new RuntimeException('The provided file is not a readable ZIP package.');
+            }
+            $workspace = Files::workspace();
+            WP_CLI::log('Checking migration package...');
+            Utils::extract($filename, $workspace);
+            $paths = [];
+            foreach (['json', 'csv', 'sql'] as $extension) {
+                $matches = glob($workspace . '/*.' . $extension);
+                if (count($matches) !== 1 || !is_file($matches[0])) {
+                    throw new RuntimeException('The package must contain exactly one metadata JSON, user CSV and SQL dump.');
+                }
+                $paths[$extension] = $matches[0];
+            }
+            if (is_dir($workspace . '/wp-content/plugins') || is_dir($workspace . '/wp-content/themes')) {
+                throw new RuntimeException('Packages containing plugins or themes are not supported; provide these separately in the destination.');
+            }
+            $meta = json_decode(file_get_contents($paths['json']), true, 512, JSON_THROW_ON_ERROR);
+            if (!is_array($meta) || !is_string($meta['url'] ?? null) || !is_string($meta['db_prefix'] ?? null)
+                || !preg_match('/^[A-Za-z0-9_]+$/D', $meta['db_prefix'])
+                || !is_int($meta['blog_id'] ?? null) || $meta['blog_id'] < 1) {
+                throw new RuntimeException('Invalid migration metadata.');
+            }
+            $sourceAddress = SiteAddress::parse($meta['url']);
+            $address = SiteAddress::parse($assoc_args['new_url'] ?? $meta['url']);
+            $this->assert_available($address);
+            $sourceTables = $this->source_tables($paths['sql'], $meta);
+            $userPlan = Users::plan(Users::read($paths['csv']));
+            $fields = array_values(array_filter(array_map('trim', explode(',', $assoc_args['uid_fields'] ?? ''))));
+            foreach ($fields as $field) {
+                if (!preg_match('/^[A-Za-z0-9_.-]+$/D', $field)) {
+                    throw new RuntimeException('Invalid numeric user-reference meta key.');
+                }
+            }
+            // This connection holds the lock through creation and import; no force/overwrite bypass.
+            $lockName = 'rrze-migration-' . substr(hash('sha256', DB_NAME . '|' . $address['domain'] . $address['path']), 0, 48);
+            if ((int) $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $lockName)) !== 1) {
+                throw new RuntimeException('Another migration is using this destination, or the destination lock is unavailable.');
+            }
+            $lock = $lockName;
+            $this->assert_available($address);
+            $existingTables = $wpdb->get_col('SHOW TABLES');
+            if ($wpdb->last_error) {
+                throw new RuntimeException('Could not inspect existing destination tables.');
+            }
+            $result = wp_insert_site(['domain' => $address['domain'], 'path' => $address['path'], 'network_id' => get_current_network_id()]);
+            if (is_wp_error($result) || !$result) {
+                throw new RuntimeException('Could not create a new destination site.');
+            }
+            $blogId = (int) $result;
+            $prefix = $wpdb->get_blog_prefix($blogId);
+            $targetTables = array_map(static fn ($table) => $prefix . substr($table, strlen($meta['db_prefix'])), $sourceTables);
+            if (array_intersect($targetTables, $existingTables)) {
+                throw new RuntimeException('The new site would collide with pre-existing tables. Import stopped.');
+            }
+            WP_CLI::log('Importing tables into new site ' . $blogId . '...');
+            $this->import_tables($paths['sql'], $sourceTables, $targetTables, $meta, $sourceAddress, $address, $blogId);
+            $ids = $this->import_users($userPlan, $blogId);
+            Posts::remap($blogId, $ids, $fields);
+            if (is_dir($workspace . '/wp-content/uploads')) {
+                $this->move_uploads($workspace . '/wp-content/uploads', $blogId);
+            }
+            switch_to_blog($blogId);
+            try {
+                flush_rewrite_rules(false);
+                if ($wpdb->last_error) {
+                    throw new RuntimeException('Could not flush rewrite rules for the new site.');
+                }
+            } finally {
+                restore_current_blog();
+            }
+        } catch (\Throwable $failure) {
+            $error = $failure->getMessage();
+        } finally {
+            if ($lock !== null) {
+                $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lock));
+            }
+            if ($workspace !== null) {
+                try {
+                    Files::remove($workspace);
+                } catch (\Throwable $failure) {
+                    $error = ($error ? $error . ' ' : '') . 'Could not clean up the private migration workspace: ' . $workspace;
+                }
+            }
         }
-
-        $temp_dir = ABSPATH . 'rrze-migration-' . time() . '/';
-
-        WP_CLI::log(__('Extracting zip package...', 'rrze-cli'));
-
-        // Extract the file to the $temp_dir.
-        Utils::extract($filename, $temp_dir);
-
-        // Looks for required (.json, .csv and .sql) files and for the optional folders
-        // that can live in the zip package (plugins, themes and uploads).
-        $site_meta_data = glob($temp_dir . '*.json');
-        $users          = glob($temp_dir . '*.csv');
-        $sql            = glob($temp_dir . '*.sql');
-        $plugins_folder = glob($temp_dir . 'wp-content/plugins');
-        $themes_folder  = glob($temp_dir . 'wp-content/themes');
-        $uploads_folder = glob($temp_dir . 'wp-content/uploads');
-
-        if (empty($site_meta_data) || empty($users) || empty($sql)) {
-            WP_CLI::error(__("There's something wrong with the zip package, unable to find required files", 'rrze-cli'));
+        if ($error !== null) {
+            if ($blogId !== null) {
+                $error .= ' New site ID ' . $blogId . ' may be incomplete. Inspect it and delete it manually in Network Admin before retrying; it was not automatically removed.';
+            }
+            WP_CLI::error($error);
         }
-
-        $site_meta_data = json_decode(file_get_contents($site_meta_data[0]));
-
-        $old_url = $site_meta_data->url;
-
-        if (!empty($assoc_args['new_url'])) {
-            $site_meta_data->url = $assoc_args['new_url'];
-        }
-
-        if (is_multisite()) {
-            $blog_id = $this->create_new_site($site_meta_data);
-        } else {
-            $blog_id = get_current_blog_id(); // Single site.
-        }
-
-        if (!$blog_id) {
-            WP_CLI::error(__('Could not get blog ID value', 'rrze-cli'));
-        }
-
-        $tables_assoc_args = [
-            'blog_id'          => $blog_id,
-            'original_blog_id' => $site_meta_data->blog_id,
-            'old_prefix'       => $site_meta_data->db_prefix,
-            'new_prefix'       => Utils::get_db_prefix($blog_id),
-        ];
-
-        // If changing URL, then set the proper params to force search-replace in the tables method.
-        if (!empty($assoc_args['new_url'])) {
-            $tables_assoc_args['new_url'] = esc_url($assoc_args['new_url']);
-            $tables_assoc_args['old_url'] = esc_url($old_url);
-        }
-
-        WP_CLI::log(__('Importing tables...', 'rrze-cli'));
-
-        // If the flag --mysql-single-transaction is passed, then the SQL is wrapped with
-        // START TRANSACTION and COMMIT to insert in one single transaction.
-        if ($assoc_args['mysql-single-transaction']) {
-            Utils::addTransaction($sql[0]);
-        }
-
-        $this->tables([$sql[0]], $tables_assoc_args, $verbose);
-
-        $this->delete_transients($site_meta_data);
-
-        $map_file = $temp_dir . '/users_map.json';
-
-        $users_assoc_args = [
-            'map_file' => $map_file,
-            'blog_id'  => $blog_id,
-        ];
-
-        WP_CLI::log(__('Moving files...', 'rrze-cli'));
-
-        if (!empty($plugins_folder)) {
-            $blog_plugins = isset($site_meta_data->blog_plugins) ? (array) $site_meta_data->blog_plugins : false;
-            $network_plugins = isset($site_meta_data->network_plugins) ? array_keys((array) $site_meta_data->network_plugins) : false;
-            $this->move_and_activate_plugins($plugins_folder[0], (array) $site_meta_data->plugins, $blog_plugins, $network_plugins);
-        }
-
-        if (!empty($uploads_folder)) {
-            $this->move_uploads($uploads_folder[0], $blog_id);
-        }
-
-        if (!empty($themes_folder)) {
-            $this->move_themes($themes_folder[0]);
-        }
-
-        WP_CLI::log(__('Importing Users...', 'rrze-cli'));
-
-        $this->users([$users[0]], $users_assoc_args, $verbose);
-
-        if (file_exists($map_file)) {
-            $postsCommand = new Posts();
-
-            $postsCommand->update_author(
-                [$map_file],
-                [
-                    'blog_id' => $blog_id,
-                    'uid_fields' => $assoc_args['uid_fields'],
-                ],
-                $verbose
-            );
-        }
-
-        WP_CLI::log(__('Flushing rewrite rules...', 'rrze-cli'));
-
-        add_action('init', function () use ($blog_id) {
-            // Flush the rewrite rules for the newly created site, just in case.
-            Utils::maybe_switch_to_blog($blog_id);
-            flush_rewrite_rules();
-            Utils::maybe_restore_current_blog();
-        }, 9999);
-
-        WP_CLI::log(__('Removing temporary files....', 'rrze-cli'));
-
-        Utils::delete_folder($temp_dir);
-
-        WP_CLI::success(
-            sprintf(
-                /* translators: %s: url */
-                __('All done, your new site is available at %s. Remember to flush the cache.', 'rrze-cli'),
-                esc_url($site_meta_data->url)
-            )
-        );
+        WP_CLI::success('All done, your new site is available at ' . $address['url']);
     }
 
-    /**
-     * Imports all users from a CVS file.
-     *
-     * This command will create a map file containing the new user_id for each user.
-     * The map file updates the post_author with the corresponding new user ID.
-     * 
-     * ## OPTIONS
-     *
-     * <inputfile>
-     * : The name of the exported CSV file.
-     * 
-     * --map_file=<user_mapping_file>
-     * : The name of the user mapping file in JSON format.
-     * 
-     * [--blog_id=<blog_id>]
-     * : The ID of the website to import.
-     * 
-     * [--tables=<table_list>]
-     * : Comma-separated list of tables to be exported.
-     * 
-     * [--custom-tables=<custom_table_list>]
-     * : Comma-separated list of non-standard tables to be exported.
-     * 
-     * wp rrze-migration import users <inputfile> --map_file=<user_mapping_file> [--blog_id=<blog_id>]
-     * 
-     * ## EXAMPLES
-     * 
-     *     # Imports users from the users.csv file based on the mapping in the users_map.json file.
-     *     $ wp rrze-migration import users users.csv --map_file=users_map.json
-     *
-     * @param array $args
-     * @param array $assoc_args
-     * @param bool  $verbose
-     */
-    public function users($args = [], $assoc_args = [], $verbose = true)
+    /** Direct imports are disabled; only import all can establish ownership of a new site. */
+    public function users($args = [], $assoc_args = [])
+    {
+        WP_CLI::error('Direct user imports are disabled. Use rrze-migration import all to create a new site.');
+    }
+
+    /** Direct imports are disabled; only import all can establish ownership of a new site. */
+    public function tables($args = [], $assoc_args = [])
+    {
+        WP_CLI::error('Direct table imports are disabled. Use rrze-migration import all to create a new site.');
+    }
+
+    private function assert_available(array $address): void
     {
         global $wpdb;
-
-        $is_multisite = is_multisite();
-
-        $this->process_args(
-            [
-                0 => '', // .csv to import users.
-            ],
-            $args,
-            [
-                'blog_id'  => 1,
-                'map_file' => 'ids_maps.json',
-            ],
-            $assoc_args
-        );
-
-
-        $filename = $this->args[0];
-
-        if (empty($filename) || !file_exists($filename)) {
-            WP_CLI::error(__('Invalid input file', 'rrze-cli'));
+        // Query all networks and all statuses, including deleted/archived entries.
+        $existing = $wpdb->get_var($wpdb->prepare("SELECT blog_id FROM {$wpdb->blogs} WHERE domain = %s AND path = %s LIMIT 1", $address['domain'], $address['path']));
+        if ($wpdb->last_error) {
+            throw new RuntimeException('Could not check whether the destination exists.');
         }
-
-        $input_file_handler = fopen($filename, 'r');
-
-        $delimiter = ',';
-
-        /**
-         * This array will hold the new id for each old id.
-         *
-         * Example:
-         * ['OLD_ID' => 'NEW_ID'];
-         */
-        $ids_maps       = [];
-        $labels         = [];
-        $count          = 0;
-        $existing_users = 0;
-
-        if (false !== $input_file_handler) {
-            $this->line(
-                sprintf(
-                    /* translators: %s: filename */
-                    __('Parsing %s...', 'rrze-cli'),
-                    $filename
-                ),
-                $verbose
-            );
-
-            $line = 0;
-
-            Utils::maybe_switch_to_blog($this->assoc_args['blog_id']);
-
-            wp_suspend_cache_addition(true);
-            while (false !== ($data = fgetcsv($input_file_handler, 0, $delimiter))) {
-                // Read the labels and skip.
-                if (0 === $line++) {
-                    $labels = $data;
-                    continue;
-                }
-
-                $user_data = array_combine($labels, $data);
-
-                $old_id = $user_data['ID'];
-                unset($user_data['ID']);
-
-                $user_exists = $wpdb->get_col(
-                    $wpdb->prepare(
-                        "SELECT ID FROM {$wpdb->users} WHERE user_login = %s OR (user_email = %s AND user_email != '');",
-                        $user_data['user_login'],
-                        $user_data['user_email']
-                    )
-                );
-
-                $user_exists = $user_exists ? $user_exists[0] : false;
-
-                if (!$user_exists) {
-
-                    /*
-                     * wp_insert_users accepts only the default user meta keys.
-                     */
-                    $default_user_data = [];
-                    foreach (Export::getUserCSVHeaders() as $key) {
-                        if (isset($user_data[$key])) {
-                            $default_user_data[$key] = $user_data[$key];
-                        }
-                    }
-
-                    // All custom user meta data.
-                    $user_meta_data = array_diff_assoc($user_data, $default_user_data);
-
-                    $new_id = wp_insert_user($default_user_data);
-
-                    if (!is_wp_error($new_id)) {
-                        $wpdb->update($wpdb->users, ['user_pass' => $user_data['user_pass']], ['ID' => $new_id]);
-
-                        $user = new \WP_User($new_id);
-
-                        // Inserts all custom meta data.
-                        foreach ($user_meta_data as $meta_key => $meta_value) {
-                            update_user_meta($new_id, $meta_key, maybe_unserialize($meta_value));
-                        }
-
-                        /**
-                         * Fires before exporting the custom user data.
-                         *
-                         * @param array  $user_data The $user_data array.
-                         * @param object $user      The user object \WP_User.
-                         */
-                        do_action('rrze_migration/import/user/custom_data_before', $user_data, $user);
-
-                        /**
-                         * Filters the default set of user data to be exported/imported.
-                         *
-                         * @param array
-                         * @param object $user The user object \WP_User.
-                         */
-                        $custom_user_data = apply_filters('rrze_migration/export/user/data', [], $user);
-
-                        if (!empty($custom_user_data)) {
-                            foreach ($custom_user_data as $meta_key => $meta_value) {
-                                if (isset($user_data[$meta_key])) {
-                                    update_user_meta($new_id, $meta_key, sanitize_text_field($meta_value));
-                                }
-                            }
-                        }
-
-                        /**
-                         * Fires after exporting the custom user data.
-                         *
-                         * @param array  $user_data The $user_data array.
-                         * @param object $user      The user object \WP_User.
-                         */
-                        do_action('rrze_migration/import/user/custom_data_after', $user_data, $user);
-
-                        $count++;
-                        $ids_maps[$old_id] = $new_id;
-                        if ($is_multisite) {
-                            Utils::light_add_user_to_blog($this->assoc_args['blog_id'], $new_id, $user_data['role']);
-                        }
-                    } else {
-                        $this->warning(
-                            sprintf(
-                                /* translators: %1$s: user_login, %2$s: error messages */
-                                __('An error has occurred when inserting %1$s: %2$s.', 'rrze-cli'),
-                                $user_data['user_login'],
-                                implode(', ', $new_id->get_error_messages())
-                            ),
-                            $verbose
-                        );
-                    }
-                } else {
-                    $this->warning(
-                        sprintf(
-                            /* translators: %1$s: user_login, %2$d: user_id */
-                            __('%1$s exists, using his ID (%2$d)...', 'rrze-cli'),
-                            $user_data['user_login'],
-                            $user_exists
-                        ),
-                        $verbose
-                    );
-
-                    $existing_users++;
-                    $ids_maps[$old_id] = $user_exists;
-                    if ($is_multisite) {
-                        Utils::light_add_user_to_blog($this->assoc_args['blog_id'], $user_exists, $user_data['role']);
-                    }
-                }
-
-                unset($user_exists);
-                unset($user_data);
-                unset($data);
-            }
-
-            wp_suspend_cache_addition(false);
-
-            Utils::maybe_restore_current_blog();
-
-            if (!empty($ids_maps)) {
-                // Saving the ids_maps to a file.
-                $output_file_handler = fopen($this->assoc_args['map_file'], 'w+');
-                fwrite($output_file_handler, json_encode($ids_maps));
-                fclose($output_file_handler);
-
-                $this->success(
-                    sprintf(
-                        /* translators: %s: filename */
-                        __('A map file has been created: %s', 'rrze-cli'),
-                        $this->assoc_args['map_file']
-                    ),
-                    $verbose
-                );
-            }
-
-            $this->success(
-                sprintf(
-                    /* translators: %1$d: number of users imported, %2$d: number of existing users */
-                    __('%1$d users have been imported and %2$d users already existed', 'rrze-cli'),
-                    absint($count),
-                    absint($existing_users)
-                ),
-                $verbose
-            );
-        } else {
-            WP_CLI::error(sprintf(
-                /* translators: %s: filename */
-                __('Can not read the file %s', 'rrze-cli'),
-                $filename
-            ));
+        if ($existing !== null) {
+            throw new RuntimeException('The destination site already exists. Delete it manually in Network Admin before importing. Existing sites are never overwritten.');
         }
     }
 
-    /**
-     * Imports the tables from a website.
-     * 
-     * This command will perform the search-replace as well as
-     * the necessary updates to make the new tables work with a multisite instance.
-     *
-     * ## OPTIONS
-     *
-     * <inputfile>
-     * : The name of the exported SQL file.
-     * 
-     * --blog_id=<blog_id>
-     * : The ID of the website where the tables are to be imported.
-     * 
-     * --old_prefix=<old_table_prefix>
-     * : The old table prefix of the exported website tables.
-     * 
-     * --new_prefix=<new_table_prefix>
-     * : The new table prefix of the tables to be imported.
-     * 
-     * [--original_blog_id=<ID>]
-     * : The original ID of the website from which the tables were exported.
-     * 
-     * [--old_url=<old_domain>]
-     * : The hostname of the website from which the tables were exported.
-     * 
-     * [--new_url=<new_domain>]
-     * : The new hostname of the website into which the tables were imported.
-     * 
-     * ## EXAMPLES
-     * 
-     *     # Imports the tables from the website.sql file with prefix wp_ and hostname old.name to the website with hostname new.domain.
-     *     $ wp rrze-migration import tables website.sql --old_prefix=wp_ --old_url=old.domain --new_url=new.domain
-     *
-     * @param array $args
-     * @param array $assoc_args
-     * @param bool  $verbose
-     */
-    public function tables($args = [], $assoc_args = [], $verbose = true)
+    private function source_tables(string $filename, array $meta): array
     {
         global $wpdb;
-
-        $this->process_args(
-            [
-                0 => '', // .sql file to import.
-            ],
-            $args,
-            [
-                'blog_id'    => '',
-                'old_url'    => '',
-                'new_url'    => '',
-                'old_prefix' => $wpdb->prefix,
-                'new_prefix' => '',
-            ],
-            $assoc_args
-        );
-
-        $filename = $this->args[0];
-
-        if (empty($filename) || !file_exists($filename)) {
-            WP_CLI::warning(__('Invalid input file', 'rrze-cli'));
-            return;
+        $sql = file_get_contents($filename);
+        if ($sql === false || $sql === '') {
+            throw new RuntimeException('The SQL dump is unreadable or empty.');
         }
-
-        if (empty($this->assoc_args['blog_id'])) {
-            WP_CLI::warning(__('Please, provide a blog_id ', 'rrze-cli'));
-            return;
+        preg_match_all('/^CREATE TABLE(?: IF NOT EXISTS)? `([A-Za-z0-9_]+)`/m', $sql, $matches);
+        $tables = $matches[1];
+        if (!$tables || count($tables) !== count(array_unique($tables))) {
+            throw new RuntimeException('The SQL dump has missing or duplicate table definitions.');
         }
-
-        // Replaces the db prefix and saves back the modifications to the sql file.
-        if (
-            !empty($this->assoc_args['new_prefix']) &&
-            !$this->replace_db_prefix($filename, $this->assoc_args['old_prefix'], $this->assoc_args['new_prefix'])
-        ) {
-            WP_CLI::warning(__('Could not replace the db prefix', 'rrze-cli'));
-            return;
+        $prefix = $meta['db_prefix'];
+        $base = $meta['blog_id'] > 1 ? preg_replace('/' . $meta['blog_id'] . '_$/D', '', $prefix) : $prefix;
+        $globals = array_map(static fn ($table) => $base . $table, $wpdb->tables('global', false));
+        Tables::select($tables, [], $globals, $prefix, $base, implode(',', $tables));
+        $core = array_map(static fn ($table) => $prefix . $table, $wpdb->tables('blog', false));
+        if (array_diff($core, $tables)) {
+            throw new RuntimeException('The SQL dump is missing required site tables.');
         }
-
-        $import = Utils::runcommand('db import', [$filename]);
-        if (0 !== $import->return_code) {
-            WP_CLI::warning(__('Could not import the database', 'rrze-cli'));
-            return;
+        if (isset($meta['tables']) && (!is_array($meta['tables']) || array_diff($tables, $meta['tables']) || array_diff($meta['tables'], $tables))) {
+            throw new RuntimeException('The SQL table list does not match the package metadata.');
         }
+        return $tables;
+    }
 
-        $this->log(__('Database imported', 'rrze-cli'), $verbose);
-
-        // Perform search and replace.
-        if (!empty($this->assoc_args['old_url']) && !empty($this->assoc_args['new_url'])) {
-            $old_url = Utils::parse_url_for_search_replace($this->assoc_args['old_url']);
-            $new_url = Utils::parse_url_for_search_replace($this->assoc_args['new_url']);
-
-            $this->log(sprintf(
-                /* translators: %1$s: old_url, %2$s: new_url */
-                __('Running search-replace for url: %1$s -> %2$s', 'rrze-cli'),
-                $old_url,
-                $new_url
-            ), $verbose);
-
-            $search_replace = WP_CLI::launch_self(
-                'search-replace',
-                [
-                    $old_url,
-                    $new_url,
-                ],
-                ['skip-tables' => 'wp_blogs'],
-                false,
-                false,
-                ['url' => $new_url]
-            );
-
-            if (0 === $search_replace) {
-                $this->log(__('Search and Replace for url has been successfully executed', 'rrze-cli'), $verbose);
-            } else {
-                WP_CLI::warning(__('Could not run search-replace for url', 'rrze-cli'));
-                return;
+    private function import_tables(string $filename, array $sourceTables, array $targetTables, array $meta, array $source, array $target, int $blogId): void
+    {
+        global $wpdb;
+        $mapping = array_combine($sourceTables, $targetTables);
+        $sql = preg_replace_callback('/\b(DROP TABLE IF EXISTS|CREATE TABLE(?: IF NOT EXISTS)?|LOCK TABLES|INSERT INTO|ALTER TABLE|REFERENCES)\s+`([^`]+)`/', static function ($match) use ($mapping) {
+            if (!isset($mapping[$match[2]])) {
+                throw new RuntimeException('The SQL dump refers to a table outside the source site.');
             }
-
-            $this->log(__('Running Search and Replace for uploads paths', 'rrze-cli'), $verbose);
-
-            $from = $to = 'wp-content/uploads';
-
-            if (isset($this->assoc_args['original_blog_id']) && $this->assoc_args['original_blog_id'] > 1) {
-                $from = 'wp-content/uploads/sites/' . (int) $this->assoc_args['original_blog_id'];
+            return $match[1] . ' `' . $mapping[$match[2]] . '`';
+        }, file_get_contents($filename));
+        Files::write($filename, $sql);
+        Utils::checked_command('db import', [$filename]);
+        Utils::checked_command('search-replace', [Utils::parse_url_for_search_replace($source['url']), Utils::parse_url_for_search_replace($target['url']), ...$targetTables], ['precise' => true], ['url' => $target['url']]);
+        $from = 'wp-content/uploads' . ($meta['blog_id'] > 1 ? '/sites/' . $meta['blog_id'] : '');
+        $to = 'wp-content/uploads/sites/' . $blogId;
+        Utils::checked_command('search-replace', [$from, $to, ...$targetTables], ['precise' => true], ['url' => $target['url']]);
+        switch_to_blog($blogId);
+        try {
+            if ($wpdb->update($wpdb->options, ['option_name' => $wpdb->prefix . 'user_roles'], ['option_name' => $meta['db_prefix'] . 'user_roles']) === false) {
+                throw new RuntimeException('Could not map the new site role option.');
             }
-
-            if ($this->assoc_args['blog_id'] > 1) {
-                $to = 'wp-content/uploads/sites/' . (int) $this->assoc_args['blog_id'];
+            wp_cache_delete('alloptions', 'options');
+            wp_cache_delete('notoptions', 'options');
+            foreach (['home', 'siteurl'] as $option) {
+                update_option($option, untrailingslashit($target['url']));
+                if (get_option($option) !== untrailingslashit($target['url']) || $wpdb->last_error) {
+                    throw new RuntimeException('Could not set the destination URL.');
+                }
             }
+        } finally {
+            restore_current_blog();
+        }
+        Utils::checked_command('transient delete', [], ['all' => true], ['url' => $target['url']]);
+    }
 
-            if ($from && $to) {
-
-                $search_replace = WP_CLI::launch_self(
-                    'search-replace',
-                    [$from, $to],
-                    [],
-                    false,
-                    false,
-                    ['url' => $new_url]
-                );
-
-                if (0 === $search_replace) {
-                    $this->log(
-                        sprintf(
-                            /* translators: %1$s: from, %2$s: to */
-                            __('Uploads paths have been successfully updated: %1$s -> %2$s', 'rrze-cli'),
-                            $from,
-                            $to
-                        ),
-                        $verbose
-                    );
+    private function import_users(array $plan, int $blogId): array
+    {
+        // Re-check the whole identity plan immediately before writing any users.
+        $plan = Users::plan($plan);
+        $ids = [];
+        switch_to_blog($blogId);
+        try {
+            wp_roles()->for_site($blogId);
+            foreach ($plan as $row) {
+                $id = $row['target_id'];
+                if ($id === null) {
+                    $data = array_intersect_key($row, array_flip(array_diff(Users::HEADERS, ['ID'])));
+                    $data['user_pass'] = wp_generate_password(64, true, true);
+                    $id = wp_insert_user($data);
+                    if (is_wp_error($id)) {
+                        throw new RuntimeException('Could not create a WordPress user for an SSO identity.');
+                    }
                 } else {
-                    WP_CLI::warning(__('Could not run search-replace for uploads paths', 'rrze-cli'));
-                    return;
+                    // Unlike add_user_to_blog(), this does not change primary_blog/source_domain.
+                    $user = new \WP_User($id, '', $blogId);
+                    $user->set_role($row['role']);
+                }
+                $user = new \WP_User($id, '', $blogId);
+                if (!in_array($row['role'], $user->roles, true)) {
+                    throw new RuntimeException('Could not assign the user role on the new site.');
+                }
+                $ids[(int) $row['ID']] = (int) $id;
+            }
+        } finally {
+            restore_current_blog();
+        }
+        return $ids;
+    }
+
+    private function move_uploads(string $source, int $blogId): void
+    {
+        switch_to_blog($blogId);
+        try {
+            $uploads = wp_upload_dir();
+            if ($uploads['error']) {
+                throw new RuntimeException('Cannot prepare the new site upload directory.');
+            }
+            foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($source, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::SELF_FIRST) as $item) {
+                $relative = substr($item->getPathname(), strlen($source) + 1);
+                $destination = $uploads['basedir'] . '/' . $relative;
+                if ($item->isLink() || is_link($destination)) {
+                    throw new RuntimeException('Symbolic links in migration uploads are not supported.');
+                }
+                if ($item->isDir()) {
+                    if (!is_dir($destination) && !mkdir($destination, 0755, true)) {
+                        throw new RuntimeException('Cannot create an upload directory.');
+                    }
+                } else {
+                    if (file_exists($destination) || !rename($item->getPathname(), $destination)) {
+                        throw new RuntimeException('An upload file already exists or could not be moved.');
+                    }
                 }
             }
+        } finally {
+            restore_current_blog();
         }
-
-        Utils::maybe_switch_to_blog((int) $this->assoc_args['blog_id']);
-
-        // Update the new tables to work properly with multisite.
-        $new_wp_roles_option_key = $wpdb->prefix . 'user_roles';
-        $old_wp_roles_option_key = $this->assoc_args['old_prefix'] . 'user_roles';
-
-        // Updating user_roles option key.
-        $wpdb->update(
-            $wpdb->options,
-            [
-                'option_name' => $new_wp_roles_option_key,
-            ],
-            [
-                'option_name' => $old_wp_roles_option_key,
-            ],
-            [
-                '%s',
-            ],
-            [
-                '%s',
-            ]
-        );
-
-        Utils::maybe_restore_current_blog();
-    }
-
-    /**
-     * Moves the plugins to the right location.
-     *
-     * @param string $plugins_dir
-     * @param array|bool $blog_plguins
-     * @param array|bool $network_plugins
-     */
-    private function move_and_activate_plugins($plugins_dir, $plugins, $blog_plugins, $network_plugins)
-    {
-        if (!file_exists($plugins_dir)) {
-            WP_CLI::warning(__('Could not find the plugins folder', 'rrze-cli'));
-            return;
-        }
-
-        WP_CLI::log(__('Moving Plugins...', 'rrze-cli'));
-        $installed_plugins = WP_PLUGIN_DIR;
-        $check_plugins = false !== $blog_plugins && false !== $network_plugins;
-        foreach ($plugins as $plugin_name => $plugin) {
-            $plugin_folder = dirname($plugin_name);
-            $fullPluginPath = $plugins_dir . '/' . $plugin_folder;
-            if (
-                $check_plugins &&  !in_array($plugin_name, $blog_plugins, true) &&
-                !in_array($plugin_name, $network_plugins, true)
-            ) {
-                continue;
-            }
-
-            if (!file_exists($installed_plugins . '/' . $plugin_folder)) {
-                WP_CLI::log(sprintf(__('Moving %s to plugins folder'), $plugin_name));
-                rename($fullPluginPath, $installed_plugins . '/' . $plugin_folder);
-            }
-
-            if ($check_plugins && in_array($plugin_name, $blog_plugins, true)) {
-                WP_CLI::log(sprintf(__('Activating plugin: %s '), $plugin_name));
-                activate_plugin($installed_plugins . '/' . $plugin_name);
-            } else if ($check_plugins && in_array($plugin_name, $network_plugins, true)) {
-                WP_CLI::log(sprintf(__('Activating plugin network-wide: %s '), $plugin_name));
-                activate_plugin($installed_plugins . '/' . $plugin_name, '', true);
-            }
-        }
-    }
-
-    /**
-     * Moves the uploads folder to the right location.
-     *
-     * @param string $uploads_dir
-     * @param int    $blog_id
-     */
-    private function move_uploads($uploads_dir, $blog_id)
-    {
-        if (!is_dir($uploads_dir)) {
-            WP_CLI::warning(__('Could not find the uploads folder', 'rrze-cli'));
-            return;
-        }
-
-        WP_CLI::log(__('Moving uploads...', 'rrze-cli'));
-        Utils::maybe_switch_to_blog($blog_id);
-        $dest_uploads_dir = wp_upload_dir();
-        Utils::maybe_restore_current_blog();
-        Utils::move_folder($uploads_dir, $dest_uploads_dir['basedir']);
-    }
-
-    /**
-     * Moves the themes to the right location.
-     *
-     * @param string $themes_dir
-     */
-    private function move_themes($themes_dir)
-    {
-        if (!is_dir($themes_dir)) {
-            WP_CLI::warning(__('Could not find the themes folder', 'rrze-cli'));
-            return;
-        }
-
-        WP_CLI::log(__('Moving Themes...', 'rrze-cli'));
-        $themes = new \DirectoryIterator($themes_dir);
-        $installed_themes = get_theme_root();
-
-        foreach ($themes as $theme) {
-            if ($theme->isDir()) {
-                $fullPluginPath = $themes_dir . '/' . $theme->getFilename();
-
-                if (!file_exists($installed_themes . '/' . $theme->getFilename())) {
-                    WP_CLI::log(sprintf(__('Moving %s to themes folder'), $theme->getFilename()));
-                    rename($fullPluginPath, $installed_themes . '/' . $theme->getFilename());
-
-                    Utils::runcommand('theme enable', [$theme->getFilename()]);
-                }
-            }
-        }
-    }
-
-    /**
-     * Creates a new site within multisite.
-     *
-     * @param object $meta_data
-     * @return false|int
-     */
-    private function create_new_site($meta_data)
-    {
-        $parsed_url = parse_url(esc_url($meta_data->url));
-
-        $site_id = get_main_network_id();
-
-        $parsed_url['path'] = $parsed_url['path'] ?? '/';
-
-        if (domain_exists($parsed_url['host'], $parsed_url['path'], $site_id)) {
-            return false;
-        }
-
-        $blog_id = wp_insert_site([
-            'domain' => $parsed_url['host'],
-            'path' => $parsed_url['path'],
-            'network_id' => $site_id
-        ]);
-
-        if (is_wp_error($blog_id)) {
-            return false;
-        }
-
-        return $blog_id;
-    }
-
-    /**
-     * Replaces the db_prefix with a new one using sed.
-     *
-     * @param string $filename      The filename of the sql file to which the db prefix should be replaced.
-     * @param string $old_db_prefix The db prefix to be replaced.
-     * @param string $new_db_prefix The new db prefix.
-     */
-    private function replace_db_prefix($filename, $old_db_prefix, $new_db_prefix)
-    {
-        $new_prefix = $new_db_prefix;
-
-        if (!empty($new_prefix)) {
-            $mysql_cmd = [
-                'DROP TABLE IF EXISTS',
-                'CREATE TABLE',
-                'LOCK TABLES',
-                'INSERT INTO',
-                'CREATE TABLE IF NOT EXISTS',
-                'ALTER TABLE',
-                'CONSTRAINT',
-                'REFERENCES',
-            ];
-
-            $search = [];
-            $replace = [];
-            foreach ($mysql_cmd as $cmd) {
-                $search[] = "{$cmd} `{$old_db_prefix}";
-                $replace[] = "{$cmd} `{$new_prefix}";
-            }
-
-            $file_contents = (string) file_get_contents($filename);
-            $file_contents = str_replace($search, $replace, $file_contents);
-            if (empty($file_contents)) {
-                WP_CLI::warning(__('It was not possible to do a search and replace of the SQL file.', 'rrze-cli'));
-                return false;
-            }
-            if (file_put_contents($filename, $file_contents) === false) {
-                WP_CLI::warning(__('Could not overwrite SQL file.', 'rrze-cli'));
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Delete old transients.
-     *
-     * @param object $meta_data
-     */
-    private function delete_transients($meta_data)
-    {
-        WP_CLI::log(__('Deleting transients...', 'rrze-cli'));
-        Utils::runcommand('transient delete', ['--all'], [], ['url' => $meta_data->url]);
     }
 }

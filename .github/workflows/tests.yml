@@ -28,7 +28,7 @@ jobs:
           --health-timeout=5s
           --health-retries=10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
@@ -53,7 +53,7 @@ jobs:
         run: composer test:integration -- --log-junit tests/.artifacts/integration/junit.xml
       - name: Preserve test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: migration-tests-php-${{ matrix.php }}
           path: tests/.artifacts/

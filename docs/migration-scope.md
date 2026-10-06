@@ -2,7 +2,7 @@
 
 Dieses Dokument definiert Arbeitspaket 1 der Überarbeitung von rrze-cli. Es dient als Grundlage für Implementierung, Tests und Betriebsabnahme. Die verbindliche Zielregel lautet: Ein Import legt ausschließlich eine neue Website in einer Multisite an. Eine vorhandene Zielwebsite muss vorher außerhalb des Imports manuell in der Multisite-Verwaltung gelöscht worden sein.
 
-Stand: 5. Oktober 2026. Die Zielregel und die unten beschriebenen betrieblichen SSO-Vorgaben sind festgelegt. Die ausdrücklich als Vorschlag bezeichneten Festlegungen zu Quellen, Benutzerkonflikten und Neuanlage, Zugangsdaten, Erweiterungen und Medien sind noch abzustimmen. Die beschriebenen Schutzmaßnahmen sind Anforderungen an die Überarbeitung und noch keine Zusicherung des aktuellen Codes.
+Stand: 5. Oktober 2026. Die Zielregel, die unten beschriebenen betrieblichen SSO-Vorgaben und die lokale Neuanlage fehlender WordPress-Benutzer mit zufälligem Passwort sind festgelegt. Die ausdrücklich als Vorschlag bezeichneten Festlegungen zu Quellen, Benutzerkonflikten, Zugangsdaten, Erweiterungen und Medien sind noch abzustimmen. Die beschriebenen Schutzmaßnahmen sind Anforderungen an die Überarbeitung und noch keine Zusicherung des aktuellen Codes.
 
 ## Verbindliche Regeln für das Ziel
 
@@ -62,7 +62,7 @@ Die folgende Abgrenzung ist der Vorschlag für den ersten abgesicherten Funktion
 | Tabellen der neuen Zielwebsite | Initialisieren und mit den zugehörigen Quelldaten befüllen. | Nur exakt bestimmte Zieltabellen. Vom aktuellen Lauf frisch angelegte Standardtabellen dürfen befüllt oder ersetzt werden; vorbestehende oder fremde Tabellen nicht. |
 | Benutzerdefinierte Tabellen | Explizit deklarierte Tabellen mit eindeutigem Bezug zur Quellwebsite übernehmen. | Globale oder gemeinsam genutzte Tabellen brauchen eine gesonderte fachliche Lösung und gehören zunächst nicht zum unterstützten Umfang. |
 | Andere Websites einschließlich Hauptsite | Für notwendige Konfliktprüfungen lesen. | Keine Änderung ihrer Inhalte, Optionen, Rollen, Dateien oder Aktivierungen. |
-| Globale Benutzer | Vorhandene Benutzer anhand der SSO-Nutzerkennung zuordnen; die Firmenadresse auf Konsistenz prüfen. Mitgliedschaft und Rolle ausschließlich für die neue Website ergänzen. Die Neuanlage fehlender WordPress-Benutzer ist noch festzulegen. | Keine Zuordnung allein anhand der E-Mail. Keine Änderung vorhandener Passwörter, Profildaten, SSO-Metadaten, Anwendungskennwörter, Superadminrechte oder Rollen anderer Websites. Der Import legt keine Identitäten im SSO-System an. |
+| Globale Benutzer | Vorhandene Benutzer anhand der SSO-Nutzerkennung zuordnen; die Firmenadresse auf Konsistenz prüfen. Mitgliedschaft und Rolle ausschließlich für die neue Website ergänzen. Fehlende WordPress-Benutzer werden mit einem neuen zufälligen lokalen Passwort angelegt. | Keine Zuordnung allein anhand der E-Mail. Keine Änderung vorhandener Passwörter, Profildaten, SSO-Metadaten, Anwendungskennwörter, Superadminrechte oder Rollen anderer Websites. Der Import legt keine Identitäten im SSO-System an. |
 | Netzwerkdaten | Die für die reguläre Neuanlage benötigten Site-Datensätze und zugehörigen Verwaltungsdaten ergänzen. | Kein Import globaler SQL-Tabellen und keine Übernahme von Netzwerkeinstellungen aus dem Paket. |
 | Plugins und Themes | Im Ziel zuvor bereitgestellte Erweiterungen prüfen und für die neue Website gemäß Migrationsplan verwenden. | Vorgeschlagen: keine Installation oder Aktualisierung aus dem Paket und keine netzwerkweite Aktivierung oder Deaktivierung durch den Import. |
 | Medien | Dateien ausschließlich in den geprüften Uploadbereich der neuen Website übertragen. | Keine Übernahme fremder Uploadverzeichnisse; Dateikonflikte werden nicht stillschweigend überschrieben oder ignoriert. |
@@ -81,14 +81,14 @@ Der vorgesehene Betrieb verwendet Pakete aus kontrollierten Exporten. Frei bezog
 | Dieselbe Kennung existiert eindeutig und die Firmenadresse stimmt überein. | Vorhandene WordPress-ID verwenden; globale Benutzerdaten unverändert lassen und nur Mitgliedschaft und Rolle für die neue Website ergänzen. |
 | Dieselbe Kennung existiert, aber die Firmenadresse weicht ab. | Als Konsistenzkonflikt vor Änderungen stoppen und fachlich klären. Weder die Kennung wechseln noch die globale E-Mail-Adresse automatisch überschreiben. Eine möglicherweise legitime Adressänderung wird nicht als zweite Identität behandelt. |
 | Die Kennung fehlt, aber die Firmenadresse gehört bereits zu einer anderen Kennung. | Konflikt melden und stoppen; keine Zusammenführung oder Zuordnung anhand der Adresse. |
-| Kennung und Firmenadresse sind im Ziel noch nicht vorhanden. | Neuanlage eines WordPress-Benutzers oder vorherige Bereitstellung ist noch zu entscheiden. Eine lokale Neuanlage würde keinen SSO-Account erzeugen und keine erfolgreiche SSO-Anmeldung beweisen. |
+| Kennung und Firmenadresse sind im Ziel noch nicht vorhanden. | Festgelegt: Der Import legt ein WordPress-Konto mit zufälligem lokalem Passwort an. Das erzeugt keinen SSO-Account und beweist keine erfolgreiche SSO-Anmeldung. |
 | Kennung oder Firmenadresse fehlt, ist ungültig oder die Quelldaten sind widersprüchlich. | Vorprüfung abbrechen; keine erfundene Ersatzkennung oder Dummy-Adresse erzeugen. |
 
 Die Validierung berücksichtigt die tatsächlich eingesetzte SSO-Kennungsbildung und deren Regeln zur Groß- und Kleinschreibung. Im lokalen `rrze-sso` kann ein konfigurierter Domain-Scope Bestandteil der Kennung sein. Der Export oder Import darf solche Bestandteile nicht eigenmächtig hinzufügen oder entfernen. Für den SSO-Ablauf ist deshalb vorgeschlagen, Änderungen durch `--usersuffix` auszuschließen; eine notwendige Überführung älterer Kennungen braucht eine gesondert geprüfte Zuordnung.
 
-**Passwörter und andere Zugangsdaten:** Vorgeschlagen wird, im SSO-Migrationsformat `user_pass`, `_application_passwords`, Sitzungstoken und Rücksetzschlüssel nicht zu exportieren und aus älteren Paketen nicht in Benutzerkonten zu übernehmen. Das gilt ebenso für benutzerdefinierte Metadaten und alternative Exportpfade; diese dürfen die Ausschlüsse nicht umgehen. Bestehende Werte im Ziel bleiben unverändert. Falls neue WordPress-Benutzer durch den Import angelegt werden sollen, benötigen sie eine zur SSO-Integration passende Initialisierung mit einem neuen zufälligen lokalen Passwort statt des Quellwerts. Es werden keine Passwörter protokolliert, ausgegeben oder versendet und keine SSO-Konten oder SSO-Zugangsdaten angelegt.
+**Passwörter und andere Zugangsdaten:** Vorgeschlagen wird, im SSO-Migrationsformat `user_pass`, `_application_passwords`, Sitzungstoken und Rücksetzschlüssel nicht zu exportieren und aus älteren Paketen nicht in Benutzerkonten zu übernehmen. Das gilt ebenso für benutzerdefinierte Metadaten und alternative Exportpfade; diese dürfen die Ausschlüsse nicht umgehen. Bestehende Werte im Ziel bleiben unverändert. Neue WordPress-Benutzer erhalten gemäß der bestätigten Vorgabe ein neues zufälliges lokales Passwort statt des Quellwerts. Es werden keine Passwörter protokolliert, ausgegeben oder versendet und keine SSO-Konten oder SSO-Zugangsdaten angelegt.
 
-**SSO-Abnahme:** Version und wirksame Konfiguration von `rrze-sso` einschließlich Kennungsbildung müssen zur Zielumgebung passen. Ein aktives Plugin allein belegt keinen funktionierenden SSO-Ablauf. In der vorgesehenen Testumgebung werden Anmeldung und Rollen für einen vorhandenen Benutzer sowie, abhängig von der Entscheidung zur Neuanlage, für einen neu bereitgestellten WordPress-Benutzer geprüft. SSO-Metadaten und Berechtigungsattribute werden nicht pauschal aus dem Paket kopiert; ihr notwendiger Umfang ist anhand der Integration festzulegen. Die Migration ändert die globale SSO-Konfiguration nicht.
+**SSO-Abnahme:** Version und wirksame Konfiguration von `rrze-sso` einschließlich Kennungsbildung müssen zur Zielumgebung passen. Ein aktives Plugin allein belegt keinen funktionierenden SSO-Ablauf. In der vorgesehenen Testumgebung werden Anmeldung und Rollen für einen vorhandenen Benutzer sowie für einen neu bereitgestellten WordPress-Benutzer geprüft. SSO-Metadaten und Berechtigungsattribute werden nicht pauschal aus dem Paket kopiert; ihr notwendiger Umfang ist anhand der Integration festzulegen. Die Migration ändert die globale SSO-Konfiguration nicht.
 
 **Berechtigungen:** Rollen dürfen nur für die neue Website vergeben werden. Unbekannte Rollen sowie Metadaten mit Bezug zu anderen Websites oder zum Netzwerk werden nicht ungeprüft übernommen. Das Anlegen neuer Benutzer darf keine Superadminrechte übertragen. Eine Website-Rolle ersetzt nicht die Authentifizierung über SSO.
 
@@ -135,18 +135,18 @@ Diese Kriterien werden in den folgenden Arbeitspaketen als Tests umgesetzt. Sie 
 
 Für die Vergleichstests werden Zugriffe anderer Prozesse kontrolliert. Zulässige Verwaltungsänderungen durch die Neuanlage werden explizit berücksichtigt; das Gesamtsystem kann wegen des neuen Site-Eintrags nicht vollständig unverändert bleiben.
 
-## Abweichungen des aktuellen Codes
+## Umsetzungsstand nach Paket 3
 
-Die folgenden Stellen müssen in späteren Arbeitspaketen angepasst und getestet werden:
+Die ursprünglichen Befunde zu Single-Site-Überschreibung, öffentlichen Teilimporten, Login-/E-Mail-Zuordnung, Passwortübernahme, Hauptsite-Tabellenfilter und verschluckten Befehlsfehlern sind bearbeitet:
 
-- `Import::all()` verwendet bei Single-Site die aktuelle Website als Ziel. Dieser Pfad verletzt Z1 und Z2.
-- `Import::create_new_site()` prüft bereits die Zieladresse, legt aber das Hauptnetzwerk fest und liefert bei einem Konflikt nur einen allgemeinen Fehler. Eindeutige Zielauswahl, erneute Prüfung und Schutz gegen konkurrierende Anlagen sind noch abzusichern.
-- Die öffentlichen Befehle `import tables`, `import users` und `posts update_author` nehmen Zielparameter entgegen, ohne die Zugehörigkeit zu einer Neuanlage des aktuellen Laufs nachzuweisen. Sie müssen die gleichen Schutzregeln erhalten oder aus dem unterstützten öffentlichen Migrationsablauf herausgenommen werden.
-- `Import::move_and_activate_plugins()` kann netzwerkweit aktivieren; das widerspricht der vorgeschlagenen Begrenzung auf die neue Website.
-- `Import::users()` sucht nach Login oder E-Mail und verwendet den ersten Treffer. Das entspricht nicht der Zuordnung über die verbindliche SSO-Kennung.
-- `Export::users()` nimmt `user_pass` und `_application_passwords` auf. `Import::users()` überschreibt bei neu angelegten Benutzern den lokalen Passwort-Hash mit dem Paketwert. Beides widerspricht der vorgeschlagenen Zugangsdatenregel für SSO.
-- `Export::users()` kann `user_login` mit `--usersuffix` verändern. Die Vereinbarkeit mit der konkreten SSO-Kennungsbildung muss vor einer weiteren Unterstützung dieses Parameters geklärt werden.
-- Benutzerzuordnung, Tabellenfilter, Fehlerweitergabe und Erfolgsmeldungen brauchen die in den Arbeitspaketen 2 bis 5 vorgesehenen Korrekturen und Prüfungen.
+- Der Import prüft Multisite, Zieladresse einschließlich Site-Status, Paketgrundstruktur und Benutzeridentitäten vor der Site-Anlage. Die Zielprüfung wird unter einer MySQL-Sperre erneut ausgeführt. Das Zielnetzwerk ergibt sich aus dem geladenen WordPress-Kontext; bestehende Adressen werden netzwerkübergreifend abgelehnt.
+- Tabellenimport, Benutzerimport und Referenzzuordnung sind intern an den im selben Lauf neu angelegten Site-Eintrag gebunden. Die bisherigen öffentlichen Änderungsbefehle sind deaktiviert beziehungsweise nicht mehr registriert.
+- SSO-Konflikte führen vor der Site-Anlage zum Fehler. Neue lokale Konten verwenden Zufallspasswörter, vorhandene Konten behalten ihre globalen Daten. Die Benutzer-CSV enthält keine bekannten Credential- oder globalen Berechtigungsfelder; solche Felder aus Altpaketen werden verworfen. Beliebige benutzerdefinierte Benutzermetadaten werden nicht eingespielt.
+- Hauptsite-Exporte enthalten standardmäßig nur die Core-Tabellen der Website. Explizite zusätzliche Tabellen müssen zur Quelle gehören; bekannte globale Tabellen und Tabellen anderer Websites sind ausgeschlossen. `--custom-tables` ergänzt die Standardauswahl.
+- Externe Datenbank- und Ersetzungsbefehle laufen in Kindprozessen; ihr Fehlerstatus stoppt den Ablauf. Temporäre Arbeitsverzeichnisse liegen privat außerhalb des Webroots. Vorhandene Exportdateien werden nicht ersetzt. Neue, unvollständige Websites bleiben zur administrativen Prüfung erhalten.
+- Das Umbenennen von SSO-Kennungen, die Codeübertragung von Plugins/Themes und das irreführende Versprechen einer atomaren SQL-Transaktion sind aus dem unterstützten Ablauf herausgenommen.
+
+Die Regressionstests und ihr verifizierter Stand stehen in [Migrationstests](testing.md). Das ist keine vollständige Abnahme von Z1–Z7 und A1–A19: Die SQL-Prüfung ist noch keine Sicherheitsgrenze für beliebige Pakete; ein vollständiges Paketformat samt Integritäts- und Ressourcenprüfung folgt. Ebenfalls offen sind Konflikte mit vorhandenen Restressourcen vor jeder WordPress-Initialisierung, Rennen mit fremden Site-Anlagen außerhalb der Migrationssperre, Prozessabbrüche, komplette Fehlerwiederherstellung, Erweiterungs-/Rollenkompatibilität und echte SSO-Anmeldungen. Die Produktionsfreigabe bleibt davon abhängig.
 
 ## Noch offene Entscheidungen und Abschluss
 
@@ -155,7 +155,7 @@ Die folgenden Stellen müssen in späteren Arbeitspaketen angepasst und getestet
 | Quellen | Single-Site sowie Hauptsite und Untersites einer Multisite. |
 | Plugins und Themes | Vorab im Ziel bereitstellen; keine Installation oder Aktualisierung durch den Import. |
 | Benutzerkonflikte | SSO-Kennung als Identität ist festgelegt. Vorgeschlagen: Abweichende Firmenadressen und Kollisionen stoppen die Vorprüfung bis zur fachlichen Klärung. |
-| Fehlende WordPress-Benutzer | Beim Import mit SSO-Kennung und Firmenadresse anlegen oder vorab bereitstellen. Keine Anlage von Konten im SSO-System. |
+| Fehlende WordPress-Benutzer | Festgelegt: Beim Import mit SSO-Kennung, Firmenadresse und zufälligem lokalem Passwort anlegen. Keine Anlage von Konten im SSO-System. |
 | Zugangsdaten | Vorgeschlagen: keine Migration von Passwörtern, Anwendungskennwörtern, Sitzungstoken oder Rücksetzschlüsseln; Initialisierung neuer WordPress-Benutzer passend zur SSO-Integration festlegen. |
 | SSO-Integration | Auf Production eingesetzte Version und Konfiguration, Kennungsnormalisierung, nötige Metadaten und eine geeignete Testanmeldung klären. Die Nutzung von `rrze-sso` auf Production ist festgelegt. |
 | Eigene Tabellen und Erweiterungen | Konkrete benötigte Tabellen, Plugins und Themes inventarisieren; globale Tabellen zunächst ausschließen. |

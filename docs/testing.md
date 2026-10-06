@@ -17,7 +17,7 @@ composer test:unit
 
 Verwendet werden das vorhandene WordPress-Core, WP-CLI und der lokale MySQL-Server, beispielsweise MAMP. Die Tests booten die bestehende WordPress-Website nicht. WP-CLI liest mit `config get` lediglich deren Datenbank-Zugangskonstanten. Zugangsdaten werden intern verarbeitet und nicht in Ausgaben oder Testberichte geschrieben.
 
-Der Testlauf erstellt zwei temporäre WordPress-Kopien mit eigenen Datenbanken. Als Datenbankserver sind ausschließlich `localhost` und `127.0.0.1` zugelassen. Der Datenbankbenutzer benötigt Rechte zum Anlegen und Löschen eigener Datenbanken. Die vorhandene WordPress-Datenbank wird weder als Testziel verwendet noch zurückgesetzt.
+Der Testlauf erstellt zwei temporäre Multisite-Kopien und eine Single-Site-Kopie mit eigenen Datenbanken. Als Datenbankserver sind ausschließlich `localhost` und `127.0.0.1` zugelassen. Der Datenbankbenutzer benötigt Rechte zum Anlegen und Löschen eigener Datenbanken. Die vorhandene WordPress-Datenbank wird weder als Testziel verwendet noch zurückgesetzt.
 
 ```sh
 composer test:integration
@@ -33,6 +33,8 @@ Standardmäßig wird WordPress drei Verzeichnisebenen oberhalb dieses Plugins ge
 | `RRZE_TEST_MYSQL_BIN` | Verzeichnis mit `mysql` und `mysqldump`, passend zum lokalen Server. |
 | `RRZE_TEST_DB_HOST`, `RRZE_TEST_DB_USER`, `RRZE_TEST_DB_PASSWORD` | Optionale lokale Testverbindung mit CREATE-/DROP-DATABASE-Rechten. Nicht gesetzte Werte werden aus der lokalen WordPress-Konfiguration gelesen. Es gibt keine Option zur Verwendung einer vorhandenen Datenbank. |
 | `RRZE_TEST_DB_CONFIG` | Optionaler Pfad zu einer privaten JSON-Datei mit `DB_HOST`, `DB_USER` und `DB_PASSWORD`. Standardmäßig wird `tests/.local.json` verwendet, sofern vorhanden. Umgebungsvariablen haben Vorrang. |
+
+Für WP-CLI wird der erste ausführbare PHP-Einstiegspunkt beziehungsweise die erste PHAR in `PATH` verwendet. Shell-Wrapper wie das von Composer vorangestellte `vendor/bin/wp` werden übersprungen, da die Sandbox WP-CLI ausdrücklich mit der gewählten PHP-Version startet. Wenn nur Shell-Wrapper installiert sind, muss `RRZE_TEST_WP_CLI` auf die eigentliche ausführbare PHAR oder PHP-Datei zeigen. Ein explizit angegebener Shell-Wrapper wird mit einem Konfigurationsfehler abgelehnt.
 
 Beispiel für die hier verwendete MAMP-Installation:
 
@@ -56,7 +58,7 @@ Diese Präfixberechtigung ist versionsabhängig: [MySQL 8 mit aktiviertem `parti
 
 ## Isolation und Aufräumen
 
-Jeder Lauf bekommt einen zufälligen Bezeichner, ein privates temporäres Verzeichnis mit Eigentumsmarker und zwei neue Datenbanken mit dem Präfix `rrze_cli_test_`. Ein bereits vorhandener Datenbankname wird nicht übernommen. Bereinigt werden ausschließlich Datenbanken, deren Anlage der aktuelle Lauf bestätigt hat, und Dateien unter seinem markierten Verzeichnis. Auch bei Testfehlern wird aufgeräumt.
+Jeder Lauf bekommt einen zufälligen Bezeichner, ein privates temporäres Verzeichnis mit Eigentumsmarker und drei neue Datenbanken mit dem Präfix `rrze_cli_test_`. Ein bereits vorhandener Datenbankname wird nicht übernommen. Bereinigt werden ausschließlich Datenbanken, deren Anlage der aktuelle Lauf bestätigt hat, und Dateien unter seinem markierten Verzeichnis. Auch bei Testfehlern wird aufgeräumt.
 
 In die Kopien gelangen nur WordPress-Core, das zu prüfende rrze-cli mit seinen Laufzeitbibliotheken, ein minimales Testtheme und ein Testfilter zum Unterbinden von E-Mail-Versand. Andere lokale Plugins, Themes, Uploads, Datenbanken und die ursprüngliche `wp-config.php` werden nicht kopiert. Die Kopien erhalten eine neue Konfiguration; Cron, automatische Core-Updates und externe WordPress-HTTP-Anfragen sind dort abgeschaltet. Für WP-CLI werden eine eigene Konfiguration und ein eigenes Paketverzeichnis verwendet.
 
@@ -72,9 +74,9 @@ Der vollständige Test prüft Inhalte, URL-Ersetzungen, Beziehungen, Dateiinhalt
 
 Vor den Vergleichen wird jede befüllte Testwebsite einmal vollständig über WP-CLI geladen. Dadurch sind WordPress' anfängliche Theme-, Widget-, Rewrite- und Cron-Einträge eingerichtet. Erst danach wird der Ausgangszustand erfasst; keine dieser Optionen wird vom Vergleich ausgenommen. Bei Unterschieden enthält der Bericht zusätzlich die Namen und Hashes der geänderten Optionen. Der vollständige Importtest verwendet bewusst eine Ziel-URL mit abschließendem Schrägstrich und erwartet korrekt ersetzte Links auch in serialisierten Werten.
 
-Ein weiterer Test importiert auf eine bereits belegte Zieladresse und erwartet einen Fehlerstatus ohne Änderung der Kontrollwebsite, ihrer Benutzer oder der Site-Liste. Dies deckt einen Teil der Zielregel ab; eine vollständige Prüfung aller Site-Status und temporären Dateien folgt mit den Sicherheitskorrekturen.
+Die Zielprüfungen testen außerdem Single-Site-Ablehnung, belegte Adressen mit anderem Schema, anderer Host-Schreibweise und fehlendem Schrägstrich sowie archivierte, als gelöscht markierte, Spam-, nichtöffentliche und als mature markierte Websites. Diese Fälle müssen vor Änderungen an der Zieldatenbank scheitern. Auch die ehemaligen direkten Änderungsbefehle werden auf Ablehnung geprüft.
 
-`tests/fixtures/user-conflicts.json` enthält zusätzliche synthetische Fälle für abweichende Firmenadressen, gleiche E-Mail bei unterschiedlichen Kennungen und widersprüchliche Login-/E-Mail-Treffer. Diese Konfliktfälle sind vorbereitet, aber noch keine bestandenen Sicherheitstests. Eine echte Anmeldung über rrze-sso oder einen Identity Provider findet in Paket 2 nicht statt.
+`tests/fixtures/user-conflicts.json` enthält zusätzliche synthetische Fälle für abweichende Firmenadressen, gleiche E-Mail bei unterschiedlichen Kennungen und widersprüchliche Login-/E-Mail-Treffer. Diese Konfliktfälle werden sowohl in Unit-Tests als auch mit veränderten Testpaketen im Integrationstest durchgespielt; die gesamte Zieldatenbank muss bei ihrer Ablehnung unverändert bleiben. Eine echte Anmeldung über rrze-sso oder einen Identity Provider findet in Paket 2 nicht statt.
 
 ## Coverage und CI
 
@@ -87,7 +89,7 @@ Der Coverage-Lauf benötigt PCOV oder Xdebug im Coverage-Modus. Er schreibt HTML
 
 Die GitHub-Actions-Konfiguration führt die Tests mit PHP 8.2, 8.3 und 8.4, WordPress 6.8.3 und MySQL 8.0.43 aus. CI erstellt lediglich eine Core-Vorlage mit Zugang zu ihrem eigenen MySQL-Service; die Testdatenbanken werden auch dort vom Testlauf neu angelegt. Berichte und Ausgaben mit ausschließlich synthetischen Testdaten werden für sieben Tage als Artefakte gespeichert. Die zusätzliche lokale Core-Version ergibt sich aus der verwendeten Installation; daraus folgt keine Freigabe aller Kombinationen für Production.
 
-## Lokal verifizierter Stand
+## Lokal verifizierter Stand von Paket 2
 
 Am 5. Oktober 2026 erfolgreich ausgeführt:
 
@@ -101,6 +103,22 @@ Der Integrationstest deckte einen Fehler bei Ziel-URLs mit abschließendem Schr�
 
 Damit ist die lokale Testgrundlage aus Paket 2 ausführbar und geprüft. Die GitHub-CI ist konfiguriert, ein tatsächlicher Lauf auf GitHub steht noch aus. Die vollständige Sicherheitsabdeckung und eine Betriebsfreigabe sind weiterhin Gegenstand der folgenden Arbeitspakete.
 
+## Lokal verifizierter Stand von Paket 3
+
+Am 5. Oktober 2026 mit der erweiterten Suite erfolgreich ausgeführt:
+
+- 61 Unit-Tests mit 83 Assertions unter PHP 8.5.10, einschließlich der parallel ergänzten WP-CLI-Erkennung.
+- 14 Integrationstests mit 184 Assertions unter PHP 8.3.30, WP-CLI 2.12.0, WordPress 7.1.2 und MAMP MySQL 5.7.44.
+- Getrennte Quell-/Ziel-Multisites und eine echte Single-Site-Testinstallation. Der Datenbankbenutzer bleibt auf `rrze_cli_test_…` beschränkt.
+- Hauptsite-Tabellenauswahl, zusätzliche eigene Tabellen, Dateinamen mit Leerzeichen und Schutz vorhandener Exportdateien.
+- Benutzerkonflikte vor Site-Anlage, sensible Felder einschließlich Filterversuchen, unveränderte vorhandene Profile/Zugangsdaten und neue WordPress-Konten mit frischem Passwort auch bei Altpaketen.
+- Fehlerhafter SQL-Import und gezielt fehlgeschlagene URL-Ersetzung: Fehlerstatus, keine Erfolgsmeldung, keine anschließende Benutzerübernahme, private Arbeitsdateien entfernt. Ein unvollständiger neuer Site-Eintrag bleibt bestehen und blockiert einen erneuten Import.
+- Grundprüfungen für kaputte CSV/JSON-Dateien, globale SQL-Tabellen, Codeverzeichnisse und Pfadtraversal im Archiv.
+
+Die Unterbefehle laufen jetzt grundsätzlich in Kindprozessen: Ein nativer Exit eines Datenbankbefehls kann den aufrufenden PHP-Prozess und dessen `finally`-Bereinigung nicht mehr überspringen. WordPress' einmalige Theme-/Widget-Initialisierung wird auch für die Single-Site-Fixture vor dem ersten Vergleich abgeschlossen.
+
+Unit-Coverage: 141 von 894 Zeilen (15,77 %). Die neuen Regeln für Tabellenauswahl sind zu 91,67 %, die URL-Identitätsprüfung zu 100 % und die Benutzer-/CSV-Regeln einschließlich ihres WordPress-Adapters zu 74,47 % zeilenweise durch Unit-Tests erfasst. Der Integrationstest prüft zusätzlich die tatsächlichen WP-CLI-Abläufe; seine Kindprozesse sind weiterhin nicht im Coverage-Prozentwert enthalten. Die Prozentwerte allein belegen keine vollständige Sicherheitsabdeckung.
+
 ## Nächste Erweiterungen
 
-Mit Paket 3 kommen Regressionstests für Fehlerweitergabe, Single-Site-Ablehnung, Hauptsite-Tabellenabgrenzung, `--custom-tables`, Benutzerkonflikte und sensible Paketfelder hinzu. Abbruch, Wiederholung, konkurrierende Läufe, Ressourcenlimits und Wiederherstellung werden mit den entsprechenden Implementierungen ergänzt. Bekannte Fehler werden nicht durch Tests als gewünschtes Verhalten festgeschrieben.
+Die vollständige Paket- und SQL-Validierung, Ressourcenlimits, Wiederherstellung nach harten Abbrüchen, Konflikte mit vorhandenen Restressourcen, konkurrierende Änderungen außerhalb der Migrationssperre, Erweiterungskompatibilität und reale SSO-Anmeldungen bleiben offen. Die vorhandenen SQL-Prüfungen sind keine Isolation für beliebige fremde SQL-Dateien. Die hier verifizierten Tests verwenden kontrollierte Exporte und gezielt veränderte synthetische Pakete. Ein tatsächlicher GitHub-CI-Lauf dieses Standes wurde in dieser Arbeit nicht durchgeführt.

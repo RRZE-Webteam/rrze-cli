@@ -32,7 +32,7 @@ final class Sandbox
             throw new RuntimeException('Set RRZE_TEST_WP_ROOT to the local WordPress installation (core and wp-config.php required).');
         }
         $this->php = getenv('RRZE_TEST_PHP_BINARY') ?: PHP_BINARY;
-        $this->wpCli = self::findExecutable(getenv('RRZE_TEST_WP_CLI') ?: 'wp');
+        $this->wpCli = WpCli::findExecutable(getenv('RRZE_TEST_WP_CLI') ?: 'wp', getenv('PATH') ?: '');
         $this->token = bin2hex(random_bytes(12));
         $directory = sys_get_temp_dir() . '/rrze-cli-tests-' . $this->token;
         if (!mkdir($directory, 0700)) {
@@ -59,6 +59,7 @@ final class Sandbox
             'WP_CLI_PACKAGES_DIR' => $this->root . '/packages',
             'WP_CLI_CACHE_DIR' => $this->root . '/cache',
             'WP_CLI_PHP' => $this->php,
+            'TMPDIR' => $this->root,
             'MYSQL_HOME' => $this->root,
             'MYSQL_TEST_LOGIN_FILE' => $this->root . '/no-login-file',
         ];
@@ -108,7 +109,7 @@ final class Sandbox
         $socket = isset($match[2]) && str_starts_with($match[2], '/') ? $match[2] : null;
         $this->database = new mysqli($match[1], $credentials['DB_USER'], $credentials['DB_PASSWORD'], null, $port, $socket);
 
-        foreach (['source' => 'src_', 'target' => 'dst_'] as $name => $prefix) {
+        foreach (['source' => 'src_', 'target' => 'dst_', 'single' => 'sgl_'] as $name => $prefix) {
             $databaseName = 'rrze_cli_test_' . $this->token . '_' . $name;
             // Never reuse an existing schema, even if it happens to have the generated name.
             $this->database->query('CREATE DATABASE `' . $databaseName . '`');
@@ -146,7 +147,7 @@ final class Sandbox
             file_put_contents($path . '/wp-config.php', $config);
             chmod($path . '/wp-config.php', 0600);
             $this->wp($name, [
-                'core', 'multisite-install', '--url=http://' . $name . '.test', '--title=Migration ' . $name,
+                'core', $name === 'single' ? 'install' : 'multisite-install', '--url=http://' . $name . '.test', '--title=Migration ' . $name,
                 '--admin_user=fixtureadmin', '--admin_password=local-test-only-8pZ!',
                 '--admin_email=admin@company.example', '--skip-email',
             ]);
@@ -156,7 +157,12 @@ final class Sandbox
                 self::copyDirectory($this->repository . '/' . $folder, $plugin . '/' . $folder);
             }
             copy($this->repository . '/rrze-cli.php', $plugin . '/rrze-cli.php');
-            $this->wp($name, ['plugin', 'activate', 'rrze-cli', '--network']);
+            $this->wp($name, ['plugin', 'activate', 'rrze-cli', ...($name === 'single' ? [] : ['--network'])]);
+            if ($name === 'single') {
+                $this->wp($name, ['theme', 'activate', 'rrze-test']);
+                $this->wp($name, ['eval', 'return;']);
+                continue;
+            }
             $this->fixture($name, 'seed', [$name]);
             // switch_to_blog() during seeding does not run the site's init hooks.
             // Complete theme/widget/cron initialization before taking any baseline.
@@ -169,7 +175,7 @@ final class Sandbox
     public function command(string $installation, array $arguments): array
     {
         $this->assertOwned();
-        if (!in_array($installation, ['source', 'target'], true)) {
+        if (!in_array($installation, ['source', 'target', 'single'], true)) {
             throw new RuntimeException('Unknown disposable installation.');
         }
         $path = $this->root . '/' . $installation;
@@ -203,8 +209,10 @@ final class Sandbox
 
     public function exportPackage(): string
     {
-        $this->wp('source', ['rrze-migration', 'export', 'all', 'fixture.zip', '--url=http://source.test/source/', '--uploads']);
         $package = $this->root . '/source/fixture.zip';
+        if (!is_file($package)) {
+            $this->wp('source', ['rrze-migration', 'export', 'all', 'fixture.zip', '--url=http://source.test/source/', '--uploads']);
+        }
         if (!is_file($package) || !copy($package, $this->root . '/target/fixture.zip')) {
             throw new RuntimeException('Export package was not created or transferred.');
         }
@@ -219,7 +227,7 @@ final class Sandbox
         $this->assertOwned();
         while ($this->createdDatabases !== []) {
             $name = $this->createdDatabases[0];
-            if (!preg_match('/^rrze_cli_test_' . $this->token . '_(source|target)$/D', $name)) {
+            if (!preg_match('/^rrze_cli_test_' . $this->token . '_(source|target|single)$/D', $name)) {
                 throw new RuntimeException('Refusing to remove a database not created by this run.');
             }
             $this->database->query('DROP DATABASE `' . $name . '`');

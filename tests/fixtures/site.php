@@ -2,7 +2,7 @@
 
 // Executed by WP-CLI only inside a test-owned copy. Never run against the developer's site.
 if (!defined('RRZE_CLI_TEST_RUN') || !preg_match('/^[a-f0-9]{24}$/D', RRZE_CLI_TEST_RUN)
-    || !in_array(DB_NAME, ['rrze_cli_test_' . RRZE_CLI_TEST_RUN . '_source', 'rrze_cli_test_' . RRZE_CLI_TEST_RUN . '_target'], true)
+    || !in_array(DB_NAME, ['rrze_cli_test_' . RRZE_CLI_TEST_RUN . '_source', 'rrze_cli_test_' . RRZE_CLI_TEST_RUN . '_target', 'rrze_cli_test_' . RRZE_CLI_TEST_RUN . '_single'], true)
     || @file_get_contents(dirname(rtrim(ABSPATH, '/')) . '/.owner') !== RRZE_CLI_TEST_RUN) {
     WP_CLI::error('Fixture refused: this is not a test-owned WordPress copy.');
 }
@@ -36,6 +36,9 @@ function rrze_test_seed(string $installation): array
     }
     update_user_meta($shared, 'saml_sp_idp', 'fixture-idp');
     update_user_meta($shared, 'first_name', $installation === 'source' ? 'Source profile' : 'Protected target profile');
+    update_user_meta($shared, '_application_passwords', [['password' => 'synthetic-application-secret']]);
+    update_user_meta($shared, 'session_tokens', ['synthetic-session' => ['token' => 'synthetic-session-secret']]);
+    $wpdb->update($wpdb->users, ['user_activation_key' => 'synthetic-reset-secret'], ['ID' => $shared]);
     switch_to_blog($site);
     switch_theme('rrze-test');
     $parent = wp_insert_post(['post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'Über uns', 'post_name' => 'about', 'post_author' => $shared]);
@@ -132,6 +135,41 @@ function rrze_test_content(int $site): array
 
 $action = $args[0] ?? '';
 $result = match ($action) {
+    'state' => (function () {
+        global $wpdb;
+        $result = [];
+        foreach ($wpdb->get_col('SHOW TABLES') as $table) {
+            $rows = $wpdb->get_results("SELECT * FROM `$table`", ARRAY_A);
+            usort($rows, fn ($a, $b) => strcmp(wp_json_encode($a), wp_json_encode($b)));
+            $result[$table] = hash('sha256', wp_json_encode($rows));
+            if (str_ends_with($table, '_options')) {
+                foreach ($rows as $row) {
+                    $result[$table . ':' . $row['option_name']] = hash('sha256', wp_json_encode($row));
+                }
+            }
+        }
+        return $result;
+    })(),
+    'status' => (function () use ($args) {
+        $field = $args[1];
+        if (!in_array($field, ['archived', 'deleted', 'spam', 'public', 'mature'], true)) {
+            throw new RuntimeException('Unsupported test status.');
+        }
+        $before = get_site(2)->$field;
+        update_blog_status(2, $field, (int) $args[2]);
+        return ['before' => $before];
+    })(),
+    'credentials' => (function () use ($args) {
+        $user = get_user_by('login', $args[1]);
+        return [
+            'login' => $user->user_login, 'email' => $user->user_email,
+            'legacy_password_works' => wp_check_password('legacy-known-password', $user->user_pass, $user->ID),
+            'reset_key_empty' => $user->user_activation_key === '',
+            'application_passwords_empty' => !get_user_meta($user->ID, '_application_passwords', true),
+            'sessions_empty' => !get_user_meta($user->ID, 'session_tokens', true),
+            'superadmin' => is_super_admin($user->ID),
+        ];
+    })(),
     'seed' => rrze_test_seed($args[1]),
     'snapshot' => rrze_test_snapshot((int) $args[1]),
     'users' => rrze_test_users(),

@@ -1,5 +1,5 @@
 {
-    "description": "Synthetic identity conflicts for the regression tests in work package 3. These cases are not yet enforced by the importer.",
+    "description": "Synthetic identity conflicts for the regression tests in work package 3. These cases are enforced by the importer and exercised by unit and integration tests.",
     "cases": [
         {
             "name": "same_login_different_email",

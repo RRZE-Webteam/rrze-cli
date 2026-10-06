@@ -13,56 +13,47 @@ Run `composer test:install` once, then `composer test:unit`. Test dependencies a
 
 ## Migration
 
-The migration overhaul is specified in [Migration scope and safety rules](docs/migration-scope.md) (German). Its required target behavior is to create a new site in a multisite only; any previous target site must first be deleted manually in Network Admin. These requirements are not yet fully enforced by the current implementation described below.
+The safety requirements and remaining acceptance work are documented in [Migration scope and safety rules](docs/migration-scope.md) (German).
 
-This WP-CLI extension simplifies the process of migrating websites on a WordPress multisite installation. It exports everything to a ZIP package, which can then be automatically imported into the desired multisite installation.
+An import creates a **new site in a multisite**. Existing sites block the import, including empty, archived, disabled or deleted-flagged sites. Delete an old destination manually in Network Admin before importing. Single-site destinations and direct table/user imports are rejected.
 
 ### Export
 
-The `rrze-migration export` command exports an entire website into a ZIP package.
+Run from the source WordPress directory:
 
-```
-$ wp rrze-migration export all
-```
-
-You can also export websites from a Multisite instance by passing the `--url` parameter. For example:
-
-```
-$ wp rrze-migration export all --url=website-url
-```
-In some special cases, `rrze-migration export` may not detect all custom tables when exporting a website to a Multisite instance. If you need to migrate non-standard tables, you can use the `--tables` or `--custom-tables` parameter. For example:
-
-```
-$ wp rrze-migration export all --url=website-url --custom-tables=custom_table_1,custom_table_2
+```sh
+wp rrze-migration export all website.zip --url=https://source.example.test/site/ --uploads
 ```
 
-If you pass `--tables`, only the specified tables will be exported. Therefore, when using this option, ensure that all necessary tables, including WordPress default tables, are included in the export.
+Existing output files are never replaced. Temporary JSON, CSV and SQL files are stored in a private directory and removed after success or a handled failure.
 
-If you pass `--uploads`, the files in the media library will also be exported. However, it is only recommended to use this option where the media library does not exceed 500 MB in total. Otherwise, it is recommended to use `rsync` for example.
+Core tables and site-owned custom tables of a subsite are selected by default. For a main site, the default includes only its core tables: its base prefix also matches global and other-site tables. Additional main-site tables require explicit selection and an administrative check that they belong exclusively to that site.
+
+```sh
+wp rrze-migration export all website.zip --url=https://source.example.test/ --custom-tables=wp_local_data --uploads
+```
+
+`--custom-tables` adds to the default selection. `--tables` selects an explicit list, but a full ZIP package must still contain every core site table. Global user/network tables and other sites' tables cannot be selected. Separate SQL and CSV exports remain available through `export tables` and `export users`.
 
 ### Import
 
-The `rrze-migration import` command can be used to import a website from a ZIP package.
+Run from the destination WordPress directory. Use the global `--url` to select the destination network context when needed.
 
-```
-$ wp rrze-migration import all website.zip
-```
-When importing into a Multisite instance, a new website within the Multisite network is created based on the exported website. When importing into a standalone installation, the current website is overwritten with the exported website.
-
-The `rrze-migration import all` command handles everything required for migrating a website within a Multisite instance.
-
-If you need to set up a new URL for the imported website, you can pass it to the `rrze-migration import all` command.
-
-```
-$ wp rrze-migration import all website.zip --new_url=new-website-url
+```sh
+wp rrze-migration import all website.zip --new_url=https://target.example.test/new-site/ --uid_fields=_fixture_user
 ```
 
-The `rrze-migration import` command also supports the `--mysql-single-transaction` parameter, which wraps the SQL export into a single transaction to commit all import changes at once, preventing database server overload.
+User matching uses the exact SSO `user_login`; the company email must agree. Conflicting logins/emails, duplicate CSV identities and unknown destination roles stop the import before a new site is created. New WordPress users receive a fresh random local password; this does not provision an SSO account. Existing global user profiles, passwords and memberships on other sites are preserved. Only the new site's membership is added.
 
-```
-$ wp rrze-migration import all website.zip --new_url=new-website-url --mysql-single-transaction
-```
+User CSV exports exclude passwords, reset keys, application passwords, sessions and global permission fields, including attempts to add these through export filters. Legacy credential fields are discarded on import. New users receive the supported standard profile fields; arbitrary custom user metadata and former import hooks are not replayed.
 
-### Notes
+Database export/import and URL replacement run in child processes. A failed command stops the migration with a nonzero status. A partially created site is retained for inspection and must be deleted manually before a retry. The import never removes sites or global users automatically.
 
-If themes and plugins are developed according to WordPress standards, migration should proceed without major issues. However, depending on the codebase of the website being migrated, you may need to make some adjustments to the code.
+### Compatibility and remaining work
+
+- `import tables`, `import users` and `posts update_author` cannot be used to mutate an existing site directly.
+- `--usersuffix` is rejected because SSO identities must remain unchanged.
+- `--plugins` and `--themes`, including legacy packages containing their code, are rejected. Provide dependencies separately in the destination.
+- `--mysql-single-transaction` is rejected: wrapping a dump containing DDL does not make the migration atomic.
+
+Use packages from controlled exports only. Current SQL table checks are not a sandbox for arbitrary SQL. Full package validation, resource limits, interrupted-run recovery, extension compatibility, complete concurrency coverage and real SSO acceptance remain part of the following work packages. An import without packaged media does not verify a separate media transfer.

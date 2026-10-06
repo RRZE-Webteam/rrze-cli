@@ -24,7 +24,7 @@ class Utils
      */
     public static function is_zip_file($filename)
     {
-        $fh = fopen($filename, 'r');
+        $fh = is_file($filename) ? @fopen($filename, 'r') : false;
 
         if (!$fh) {
             return false;
@@ -52,7 +52,7 @@ class Utils
         $parsed_url = parse_url(esc_url($url));
         $path = isset($parsed_url['path']) ? rtrim($parsed_url['path'], '/') : '';
 
-        return $parsed_url['host'] . $path;
+        return $parsed_url['host'] . (isset($parsed_url['port']) ? ':' . $parsed_url['port'] : '') . $path;
     }
 
     /**
@@ -281,12 +281,17 @@ class Utils
 
         $zipFile = new \PhpZip\ZipFile();
         try {
-            $zipFile
-                ->openFile($filename) // open archive from file
-                ->extractTo($dest_dir) // extract files to the specified directory    
-                ->close(); // close archive  
+            $zipFile->openFile($filename);
+            foreach ($zipFile->getEntries() as $entry) {
+                $name = $entry->getName();
+                if ($entry->isUnixSymlink() || str_contains($name, '\\') || str_contains($name, "\0")
+                    || str_starts_with($name, '/') || preg_match('~^[A-Za-z]:|(?:^|/)\.\.?(?:/|$)~', $name)) {
+                    throw new \RuntimeException('Unsafe path or symbolic link in the migration archive.');
+                }
+            }
+            $zipFile->extractTo($dest_dir);
         } catch (ZipException $e) {
-            // handle exception
+            throw new \RuntimeException('Could not extract the migration archive.', 0, $e);
         } finally {
             $zipFile->close();
         }
@@ -316,7 +321,7 @@ class Utils
                 ->saveAsFile($zip_file) // save the archive to a file
                 ->close(); // close archive
         } catch (ZipException $e) {
-            WP_CLI::warning($e->getMessage());
+            throw new \RuntimeException('Could not create the migration archive.', 0, $e);
         } finally {
             $zipFile->close();
         }
@@ -336,21 +341,25 @@ class Utils
     {
         $assoc_args = array_merge($assoc_args, $global_args);
 
-        $transformed_assoc_args = [];
-
-        foreach ($assoc_args as $key => $arg) {
-            $transformed_assoc_args[] = '--' . $key . '=' . $arg;
-        }
-        $params = sprintf('%s %s', implode(' ', $args), implode(' ', $transformed_assoc_args));
+        $params = implode(' ', array_map('escapeshellarg', $args)) . WP_CLI\Utils\assoc_args_to_str($assoc_args);
 
         $options = [
             'return'     => 'all', // Returns all data
-            'launch'     => false, // Do not start a new system process
+            'launch'     => true, // Native db commands may exit PHP; contain them in a child process.
             'exit_error' => false, // Prevent WP-CLI from stopping execution on error
         ];
 
         // error_log(sprintf('%s %s', $command, $params));
         return WP_CLI::runcommand(sprintf('%s %s', $command, $params), $options);
+    }
+
+    public static function checked_command($command, $args = [], $assoc_args = [], $global_args = [])
+    {
+        $result = self::runcommand($command, $args, $assoc_args, $global_args);
+        if ($result->return_code !== 0) {
+            throw new \RuntimeException(sprintf('Migration command "%s" failed (exit %d).', $command, $result->return_code));
+        }
+        return $result->stdout;
     }
 
     /**
