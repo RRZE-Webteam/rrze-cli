@@ -43,7 +43,8 @@ final class Preflight
                 'action' => $row['target_id'] === null ? 'create_wordpress_user' : 'add_site_membership',
                 'target_id' => $row['target_id'],
             ], $users),
-            'uploads' => ['included' => $meta['uploads_included'], 'files' => count($uploads), 'bytes' => array_sum(array_column($uploads, 'bytes'))],
+            'uploads' => ['included' => $meta['uploads_included'], 'files' => count($uploads), 'bytes' => array_sum(array_column($uploads, 'bytes')),
+                'excluded_directories' => $meta['excluded_upload_directories'] ?? []],
             'user_reference_fields' => $fields,
             'limitations' => [
                 'Site ID and available disk space are estimates, not reservations; execution repeats these checks.',
@@ -53,6 +54,9 @@ final class Preflight
         ];
         if (!$meta['uploads_included']) {
             $report['limitations'][] = 'Media are not included. A separate media transfer is not verified.';
+        }
+        if ($report['uploads']['excluded_directories']) {
+            $report['limitations'][] = 'Explicitly excluded upload directories are not transferred or verified.';
         }
         return compact('meta', 'source', 'target', 'users', 'fields', 'mapping', 'destination', 'report');
     }

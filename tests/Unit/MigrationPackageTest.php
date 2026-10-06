@@ -96,6 +96,37 @@ final class MigrationPackageTest extends TestCase
         Package::read($file, null);
     }
 
+    public function testDeclaredExclusionCannotHideAnIncludedFile(): void
+    {
+        $file = $this->archive(['wp-content/uploads/backups/file.jpg' => 'data'], static function ($meta) {
+            $meta['excluded_upload_directories'] = ['backups'];
+            return $meta;
+        });
+        $this->expectExceptionMessage('file declared as excluded');
+        Package::read($file, null);
+    }
+
+    public function testInvalidExclusionMetadataIsRejected(): void
+    {
+        $file = $this->archive([], static function ($meta) {
+            $meta['excluded_upload_directories'] = ['../outside'];
+            return $meta;
+        });
+        $this->expectExceptionMessage('Unsafe path');
+        Package::read($file, null);
+    }
+
+    public function testUnsafeFilenameIsReportedWithoutRawTerminalControlCharacters(): void
+    {
+        try {
+            Package::path("wp-content/uploads/unsafe\033[2J.jpg");
+            self::fail('Control characters must be rejected.');
+        } catch (RuntimeException $error) {
+            self::assertStringContainsString('Path: wp-content/uploads/unsafe', $error->getMessage());
+            self::assertStringNotContainsString("\033", $error->getMessage());
+        }
+    }
+
     #[DataProvider('limits')]
     public function testResourceLimitsAreAppliedBeforeExtraction(array $limits): void
     {

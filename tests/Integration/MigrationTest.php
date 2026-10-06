@@ -703,11 +703,12 @@ PHPHOOK);
         $file = self::$sandbox->root . '/wizard export.zip';
         $dialogue = [
             ['New ZIP filename', $file], ['Additional site-owned tables', ''], ['Include uploads', ''],
+            ['Upload subdirectories to exclude', ''],
             ['Type that complete URL', $url], ['Create this export package now', 'yes'],
         ];
         $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=' . $source], $dialogue);
         self::assertSame(0, $result['code'], $result['stdout']);
-        self::assertSame(5, $result['answers']);
+        self::assertSame(6, $result['answers']);
         self::assertFileExists($file);
         $zip = new ZipArchive();
         self::assertTrue($zip->open($file));
@@ -717,7 +718,7 @@ PHPHOOK);
         self::assertCount(1, array_filter(array_keys($meta['files']), static fn ($name) => str_ends_with($name, '/fixture.png')));
         $zip->close();
         $hash = hash_file('sha256', $file);
-        $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=' . $source], array_slice($dialogue, 0, 3));
+        $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=' . $source], array_slice($dialogue, 0, 4));
         self::assertNotSame(0, $result['code']);
         self::assertStringContainsString('output file already exists', $result['stdout']);
         self::assertSame($hash, hash_file('sha256', $file));
@@ -732,6 +733,7 @@ PHPHOOK);
             $file = self::$sandbox->root . '/cancel-' . bin2hex(random_bytes(3)) . '.zip';
             $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=http://source.test/source/'], [
                 ['New ZIP filename', $file], ['Additional site-owned tables', ''], ['Include uploads', ''],
+                ['Upload subdirectories to exclude', ''],
                 ['Type that complete URL', $answer],
             ]);
             self::assertNotSame(0, $result['code'], $result['stdout']);
@@ -888,6 +890,119 @@ PHPHOOK);
         self::assertStringNotContainsString('Type that complete URL', $result['stdout']);
         self::assertSame($before, self::$sandbox->fixture('target', 'state'));
         self::assertNull($this->runStatus($this->runId($result))['site_id']);
+        $this->assertWorkspaceClean();
+    }
+
+    public function testLargeSqlValueSurvivesPreflightAndImportWithoutChangingOtherSites(): void
+    {
+        $source = self::$sandbox->fixture('source', 'snapshot', ['2']);
+        $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
+        // Varied data keeps the package below the compression-ratio limit.
+        $value = '';
+        for ($index = 0; $index < 12000; $index++) {
+            $value .= hash('sha256', (string) $index) . " Grüße \\ ' \" # -- /* INSERT INTO `foreign`; ";
+        }
+        $serialized = serialize(['large' => $value, 'nested' => ['retained' => true]]);
+        self::assertGreaterThan(1000000, strlen($serialized));
+        $package = $this->modifiedPackage(static function (ZipArchive $zip) use ($serialized): void {
+            $literal = str_replace(['\\', "'"], ['\\\\', "\\'"], $serialized);
+            $sql = "\nINSERT INTO `src_2_options` (`option_name`,`option_value`,`autoload`) VALUES ('rrze_large_sql_fixture','$literal','no');\n";
+            $zip->addFromString('tables.sql', $zip->getFromName('tables.sql') . $sql);
+        });
+        $url = 'http://target.test/long-sql-value/';
+        $args = ['rrze-migration', 'import', 'all', $package, '--new_url=' . $url, '--uid_fields=_fixture_user'];
+        $before = self::$sandbox->fixture('target', 'state');
+        $files = $this->uploadsSnapshot();
+        $plan = json_decode(self::$sandbox->wp('target', [...$args, '--dry-run', '--format=json']), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('create_new_site', $plan['action']);
+        self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        self::assertSame($files, $this->uploadsSnapshot());
+        $result = self::$sandbox->command('target', $args);
+        self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
+        self::assertSame('completed', $this->runStatus($this->runId($result))['observed_status']);
+        $hash = trim(self::$sandbox->wp('target', ['eval', "echo hash('sha256', serialize(get_option('rrze_large_sql_fixture')));", '--url=' . $url]));
+        self::assertSame(hash('sha256', $serialized), $hash);
+        self::assertSame($source, self::$sandbox->fixture('source', 'snapshot', ['2']));
+        self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
+        $this->assertWorkspaceClean();
+    }
+
+    public function testUnterminatedSqlTokensAreRejectedBeforeCreatingASite(): void
+    {
+        foreach (["SELECT 'synthetic-secret", '/* synthetic-secret', "/*!40000 SELECT 'synthetic-secret */;"] as $index => $broken) {
+            $package = $this->modifiedPackage(static function (ZipArchive $zip) use ($broken): void {
+                $zip->addFromString('tables.sql', $zip->getFromName('tables.sql') . "\n" . $broken);
+            });
+            $files = $this->uploadsSnapshot();
+            $this->assertRejected($package, 'http://target.test/unterminated-sql-' . $index . '/', 'Unterminated');
+            self::assertSame($files, $this->uploadsSnapshot());
+        }
+    }
+
+    public function testExplicitUploadExclusionPreservesSourceProtectionFilesAndRecordsOmissions(): void
+    {
+        $uploads = self::$sandbox->root . '/source/wp-content/uploads/sites/2';
+        mkdir($uploads . '/wp-migrate-db', 0700);
+        mkdir($uploads . '/wp-migrate-db-keep', 0700);
+        file_put_contents($uploads . '/wp-migrate-db/.htaccess', 'Deny from all');
+        file_put_contents($uploads . '/wp-migrate-db/index.php', '<?php // Synthetic protection file');
+        file_put_contents($uploads . '/wp-migrate-db/backup.sql', 'synthetic backup data');
+        file_put_contents($uploads . '/wp-migrate-db-keep/keep.txt', 'ordinary upload');
+        $source = self::$sandbox->fixture('source', 'snapshot', ['2']);
+        $sourceUrl = trim(self::$sandbox->wp('source', ['option', 'get', 'home', '--url=http://source.test/source/']));
+        $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', 'blocked.zip', '--uploads', '--url=http://source.test/source/']);
+        self::assertNotSame(0, $result['code']);
+        self::assertStringContainsString('wp-content/uploads/wp-migrate-db/.htaccess', $result['stderr']);
+        self::assertFileDoesNotExist(self::$sandbox->root . '/source/blocked.zip');
+        $this->assertWorkspaceClean();
+        $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', 'invalid-exclusion.zip', '--exclude-upload-dirs=wp-migrate-db', '--url=http://source.test/source/']);
+        self::assertNotSame(0, $result['code']);
+        self::assertStringContainsString('requires --uploads', $result['stderr']);
+        self::assertFileDoesNotExist(self::$sandbox->root . '/source/invalid-exclusion.zip');
+        self::$sandbox->wp('source', ['rrze-migration', 'export', 'all', 'direct-excluded.zip', '--uploads', '--exclude-upload-dirs=wp-migrate-db', '--url=http://source.test/source/']);
+        $file = self::$sandbox->root . '/target/excluded.zip';
+        $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=http://source.test/source/'], [
+            ['New ZIP filename', $file], ['Additional site-owned tables', ''], ['Include uploads', 'yes'],
+            ['Upload subdirectories to exclude', 'wp-migrate-db'], ['Type that complete URL', $sourceUrl], ['Create this export package now', 'yes'],
+        ]);
+        self::assertSame(0, $result['code'], $result['stdout']);
+        self::assertSame(6, $result['answers']);
+        self::assertStringContainsString('Excluded upload directories: wp-migrate-db', $result['stdout']);
+        $zip = new ZipArchive();
+        self::assertTrue($zip->open($file));
+        $meta = json_decode($zip->getFromName('site.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['wp-migrate-db'], $meta['excluded_upload_directories']);
+        self::assertFalse($zip->locateName('wp-content/uploads/wp-migrate-db/.htaccess'));
+        self::assertFalse($zip->locateName('wp-content/uploads/wp-migrate-db/index.php'));
+        self::assertFalse($zip->locateName('wp-content/uploads/wp-migrate-db/backup.sql'));
+        self::assertSame('ordinary upload', $zip->getFromName('wp-content/uploads/wp-migrate-db-keep/keep.txt'));
+        $zip->close();
+        $targetBefore = self::$sandbox->fixture('target', 'state');
+        $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
+        $url = 'http://target.test/explicit-exclusion/';
+        $plan = json_decode(self::$sandbox->wp('target', ['rrze-migration', 'import', 'all', 'excluded.zip', '--new_url=' . $url, '--dry-run', '--format=json']), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['wp-migrate-db'], $plan['uploads']['excluded_directories']);
+        $dialogue = $this->wizardImportDialogue('excluded.zip', $url);
+        $dialogue[] = ['Listed upload directories were excluded and will not be restored. Continue', ''];
+        $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
+        self::assertNotSame(0, $result['code']);
+        self::assertSame(6, $result['answers']);
+        self::assertSame($targetBefore, self::$sandbox->fixture('target', 'state'));
+        $dialogue[5][1] = 'yes';
+        $dialogue[] = ['Type that complete URL', $url];
+        $dialogue[] = ['Create the new website and execute this plan now', 'yes'];
+        $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
+        self::assertSame(0, $result['code'], $result['stdout']);
+        self::assertSame(8, $result['answers']);
+        $state = $this->runStatus($this->runId($result));
+        self::assertSame('completed', $state['observed_status']);
+        $content = self::$sandbox->fixture('target', 'content', [(string) $state['site_id']]);
+        $original = self::$sandbox->fixture('source', 'content', ['2']);
+        self::assertSame($original['media_hash'], $content['media_hash']);
+        self::assertSame('ordinary upload', file_get_contents($state['uploads_directory'] . '/wp-migrate-db-keep/keep.txt'));
+        self::assertDirectoryDoesNotExist($state['uploads_directory'] . '/wp-migrate-db');
+        self::assertSame($source, self::$sandbox->fixture('source', 'snapshot', ['2']));
+        self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
         $this->assertWorkspaceClean();
     }
 

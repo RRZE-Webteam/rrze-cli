@@ -21,11 +21,14 @@ final class Package
         $path = $directory ? rtrim($name, '/') : $name;
         if ($path === '' || strlen($name) > 1024 || !preg_match('//u', $name)
             || preg_match('~[\x00-\x1f\x7f\\\\:%]|\p{M}~u', $path)) {
-            throw new RuntimeException('Unsafe path in the migration package.');
+            throw new RuntimeException('Unsafe path in the migration package. Path: ' . Terminal::safe($name));
+        }
+        if (preg_match('~(?:^|/)(?:\.htaccess|\.user\.ini)(?:/|$)|\.(?:php[0-9]*|phtml|phar|phps|cgi|pl|py|sh|shtml)(?:[./]|$)~i', $path)) {
+            throw new RuntimeException('Executable files and server configuration are not supported in migration uploads. Path: ' . Terminal::safe($name));
         }
         foreach (explode('/', $path) as $part) {
             if ($part === '' || $part === '.' || $part === '..' || trim($part, " .\t") !== $part) {
-                throw new RuntimeException('Unsafe path in the migration package.');
+                throw new RuntimeException('Unsafe path in the migration package. Path: ' . Terminal::safe($name));
             }
         }
         if (!$directory && in_array($path, ['site.json', 'users.csv', 'tables.sql'], true)) {
@@ -35,10 +38,7 @@ final class Package
             return $path;
         }
         if (!str_starts_with($path, 'wp-content/uploads/')) {
-            throw new RuntimeException('Unexpected file or directory in the migration package.');
-        }
-        if (preg_match('~(?:^|/)(?:\.htaccess|\.user\.ini)(?:/|$)|\.(?:php[0-9]*|phtml|phar|phps|cgi|pl|py|sh|shtml)(?:[./]|$)~i', $path)) {
-            throw new RuntimeException('Executable files and server configuration are not supported in migration uploads.');
+            throw new RuntimeException('Unexpected file or directory in the migration package. Path: ' . Terminal::safe($name));
         }
         return $path;
     }
@@ -56,6 +56,11 @@ final class Package
             throw new RuntimeException('Invalid migration metadata.');
         }
         SiteAddress::parse($meta['url']);
+        $excluded = $meta['excluded_upload_directories'] ?? [];
+        if (!is_array($excluded) || (!$meta['uploads_included'] && $excluded)) {
+            throw new RuntimeException('Invalid excluded upload directory metadata.');
+        }
+        UploadExclusions::validate($excluded);
         foreach ($meta['tables'] as $table) {
             if (!is_string($table) || !preg_match('/^[A-Za-z0-9_]+$/D', $table)) {
                 throw new RuntimeException('Invalid table manifest.');
@@ -72,6 +77,9 @@ final class Package
             }
             if (!$meta['uploads_included'] && str_starts_with($name, 'wp-content/uploads/')) {
                 throw new RuntimeException('Upload manifest contradicts the package metadata.');
+            }
+            if (UploadExclusions::contains($name, $excluded)) {
+                throw new RuntimeException('Upload manifest contains a file declared as excluded.');
             }
         }
     }
@@ -212,13 +220,19 @@ final class Package
         if (!class_exists(ZipArchive::class)) {
             throw new RuntimeException('Migration packages require the PHP zip extension.');
         }
+        $excluded = $meta['excluded_upload_directories'] ?? [];
+        UploadExclusions::validate($excluded);
         $files = [];
         foreach ($paths as $name => $path) {
             if (is_link($path)) {
                 throw new RuntimeException('Symbolic links cannot be exported.');
             }
             if (is_dir($path)) {
-                foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS)) as $entry) {
+                $entries = new \RecursiveCallbackFilterIterator(
+                    new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS),
+                    static fn ($entry) => !UploadExclusions::contains($name . '/' . substr($entry->getPathname(), strlen($path) + 1), $excluded)
+                );
+                foreach (new \RecursiveIteratorIterator($entries) as $entry) {
                     if ($entry->isLink() || !$entry->isFile()) {
                         throw new RuntimeException('Links and special files cannot be exported.');
                     }

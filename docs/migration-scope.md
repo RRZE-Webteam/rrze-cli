@@ -178,6 +178,8 @@ Nichtinteraktive Ein-/Ausgabe und automatische Bestätigung werden im Wizard abg
 
 ## Noch offene Entscheidungen und Abschluss
 
+Upload-Unterverzeichnisse können inzwischen ausdrücklich mit `--exclude-upload-dirs` oder im Export-Wizard vom Paket ausgeschlossen werden. Die Auswahl wird vor der Freigabe angezeigt, im Manifest gespeichert und beim Import sichtbar gemacht. Der Import-Wizard verlangt eine zusätzliche Zustimmung. Ausgeschlossene Dateien werden nicht übertragen oder auf Vollständigkeit geprüft; ihre Quelldateien bleiben erhalten. Ohne Auswahl bleibt der Export vollständig innerhalb des bisherigen Uploadumfangs und lehnt unzulässige Dateien weiterhin ab.
+
 | Thema | Vorschlag für den ersten abgesicherten Umfang |
 | --- | --- |
 | Quellen | Single-Site sowie Hauptsite und Untersites einer Multisite. |

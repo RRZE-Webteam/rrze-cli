@@ -28,6 +28,14 @@ wp rrze-migration export all website.zip --url=https://source.example.test/site/
 
 Existing output files are never replaced. Temporary JSON, CSV and SQL files are stored in a private directory and removed after success or a handled failure.
 
+Uploads containing server configuration or executable files, such as `.htaccess` or `index.php`, block export and the error names the offending path. To omit a plugin's backup or temporary directory deliberately, use an explicit directory exclusion:
+
+```sh
+wp rrze-migration export all website.zip --url=https://source.example.test/site/ --uploads --exclude-upload-dirs=wp-migrate-db
+```
+
+`--exclude-upload-dirs` accepts comma-separated existing directories relative to that site's upload root, without wildcards. Nothing is excluded by default. Each selected directory and its descendants are omitted; neighbouring names such as `wp-migrate-db-other` remain included. Source files are neither deleted nor modified. The omission is recorded in `site.json` and shown in the import plan; excluded files are not transferred or verified. Do not remove source protection files just to satisfy the archive checks.
+
 Core tables and site-owned custom tables of a subsite are selected by default. For a main site, the default includes only its core tables: its base prefix also matches global and other-site tables. Additional main-site tables require explicit selection and an administrative check that they belong exclusively to that site.
 
 ```sh
@@ -50,6 +58,8 @@ The export wizard shows the selected source and tables, includes uploads by defa
 The wizard uses the same export/import implementation and preflight as the direct commands. Import approval applies to the preserved package copy and the displayed plan. A changed site allocation, table mapping or user action during review stops execution before site creation. Cancelled imports can retain a private journal and package with status `failed`, no site ID and a completed cleanup checkpoint. Use the existing status command to inspect them.
 
 Piped input/output, `--yes` and `--quiet` are rejected. Scripts continue to use `export all`, `import all --dry-run --format=json` and `import all` with explicit arguments. See [Wizard usage](docs/migration-wizard.md) (German) for the guided workflow and cancellation behavior.
+
+When uploads are enabled, the export wizard also asks for optional directory exclusions and lists them before confirmation. The import wizard displays recorded exclusions and requires separate consent before importing such a package.
 
 ### Preflight and dry-run
 

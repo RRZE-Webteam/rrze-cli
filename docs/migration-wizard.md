@@ -24,9 +24,14 @@ wp rrze-migration wizard export --url=https://source.example.test/site/
 2. Einen neuen ZIP-Dateinamen wählen. Bestehende Dateien werden abgelehnt.
 3. Bei Bedarf zusätzliche, ausschließlich dieser Website gehörende Tabellen angeben. Die automatische Auswahl entspricht `export all`; bei Hauptsites sind zusätzliche eigene Tabellen ausdrücklich zu benennen und fachlich zu prüfen.
 4. Die Medienauswahl prüfen. Uploads sind vorausgewählt. Plugins und Themes werden separat im Ziel bereitgestellt.
-5. Den Plan mit Quelle, Tabellen, Ausgabeort und Medienauswahl lesen. Die angezeigte vollständige Quell-URL wiederholen und anschließend `yes` eingeben.
+5. Bei enthaltenen Uploads gegebenenfalls Verzeichnisse ausdrücklich ausschließen. Die Eingabe bleibt normalerweise leer. Für ein nicht zu migrierendes Plugin-Arbeitsverzeichnis wie `wp-migrate-db` genau diesen relativen Namen eingeben; mehrere Namen werden mit Komma getrennt. Es werden keine Verzeichnisse automatisch ausgelassen.
+6. Den Plan mit Quelle, Tabellen, Ausgabeort, Medienauswahl und Ausschlüssen lesen. Die angezeigte vollständige Quell-URL wiederholen und anschließend `yes` eingeben.
 
 Erst nach dieser Bestätigung wird die Ausgabedatei angelegt. Der Export enthält keine Benutzerpasswörter oder Sitzungstoken. Die ZIP-Datei anschließend über den betrieblich vorgesehenen Weg auf das Zielsystem übertragen.
+
+Enthalten Uploads `.htaccess`, `index.php` oder andere nicht erlaubte Dateien, benennt die Fehlermeldung den betroffenen Paketpfad. Solche Schutz- oder Konfigurationsdateien auf der Quelle nicht löschen, um den Export zu ermöglichen. Ein ausdrücklich ausgewähltes Verzeichnis wird einschließlich seiner Unterverzeichnisse nur aus dem Paket ausgelassen; seine Quelldateien bleiben erhalten. Absolute Pfade, Pfadtraversal, symbolische Links und fehlende Verzeichnisse sind als Ausschluss unzulässig. Die Auswahl arbeitet mit vollständigen Verzeichnisnamen, nicht mit Wildcards.
+
+Die Ausschlüsse stehen im Paketmanifest unter `excluded_upload_directories` und im späteren Importplan. Beim direkten Export lautet die entsprechende Option `--exclude-upload-dirs=wp-migrate-db` zusammen mit `--uploads`. Ein ähnlich benannter Ordner wie `wp-migrate-db-other` bleibt enthalten. Ein solches Paket ist keine vollständige Sicherung des ursprünglichen Upload-Verzeichnisses.
 
 ## Import zunächst prüfen
 
@@ -43,6 +48,8 @@ Bei `Next action (preview/import) [preview]` startet Enter die vollständige Vor
 Den Assistenten erneut starten und bei `Next action` ausdrücklich `import` wählen. Ein privates dauerhaftes Laufverzeichnis außerhalb der Webverzeichnisse angeben; eine konfigurierte `RRZE_MIGRATION_RUN_DIR` wird als Vorgabe angezeigt. Einrichtung und Aufbewahrung beschreibt die [Wiederherstellungsanleitung](migration-recovery.md).
 
 Vor dem Bestätigen wird das Paket privat kopiert und geprüft. Der Plan bezieht sich auf genau diese Kopie. Er nennt die bestehenden WordPress-Konten, die nur eine neue Website-Mitgliedschaft erhalten, und die fehlenden Konten, die mit zufälligem lokalem Passwort angelegt werden. SSO-Identitäten werden nicht angelegt oder verändert. Fehlende Medien verlangen eine zusätzliche ausdrückliche Bestätigung; ein separater Transfer wird dadurch nicht als geprüft ausgegeben.
+
+Enthält das Paket ausdrücklich ausgeschlossene Upload-Verzeichnisse, zeigt der Plan deren Namen. Der Wizard verlangt dafür eine zusätzliche Zustimmung mit Vorgabe `no`: Diese Verzeichnisse werden weder übertragen noch auf Vollständigkeit geprüft. Eine ausdrückliche Auswahl beim Export lockert keine Pfad-, Dateityp- oder Prüfsummenregel für die enthaltenen Dateien.
 
 Die vollständig angezeigte Ziel-URL einschließlich Schema und abschließendem Pfad wiederholen. Danach fragt der Assistent, ob er die neue Website anlegen und den Plan ausführen soll. Nur `yes` stimmt zu; Enter bedeutet `no`. Eine abweichende URL bricht ab.
 

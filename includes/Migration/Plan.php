@@ -23,6 +23,7 @@ final class Plan
         }
         $lines[] = 'Numeric user-reference fields: ' . (implode(', ', $plan['user_reference_fields']) ?: 'none');
         $lines[] = 'Media: ' . $plan['uploads']['files'] . ' files, ' . $plan['uploads']['bytes'] . ' bytes';
+        $lines[] = 'Excluded upload directories: ' . (implode(', ', $plan['uploads']['excluded_directories'] ?? []) ?: 'none');
         $lines[] = 'Upload destination: ' . $plan['destination_details']['uploads_directory'];
         foreach ($plan['limitations'] as $limitation) {
             $lines[] = 'Note: ' . $limitation;

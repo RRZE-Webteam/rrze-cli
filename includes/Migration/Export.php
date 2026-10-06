@@ -28,6 +28,8 @@ class Export extends Command
      * : Additional site-owned tables, including explicitly selected main-site tables.
      * [--uploads]
      * : Include the site's uploads.
+     * [--exclude-upload-dirs=<directories>]
+     * : Explicit comma-separated upload subdirectories to omit; requires --uploads. No wildcards.
      * [--plugins]
      * : Unsupported; provide plugins separately in the destination.
      * [--themes]
@@ -54,32 +56,40 @@ class Export extends Command
             if (file_exists($output) || is_link($output)) {
                 throw new RuntimeException('The output file already exists. Choose a new filename.');
             }
-            if ($this->review !== null && !($this->review)([
-                'source' => home_url(), 'site_id' => get_current_blog_id(), 'tables' => $tables,
-                'output' => $output, 'uploads' => isset($assoc_args['uploads']),
-            ])) {
-                throw new RuntimeException('Export cancelled. No output file was created.');
-            }
-            fclose(Files::output($output));
-            $reserved = true;
-            $workspace = Files::workspace();
-            $meta = [
-                'url' => home_url(), 'name' => get_bloginfo('name'), 'admin_email' => get_bloginfo('admin_email'),
-                'site_language' => get_bloginfo('language'), 'db_prefix' => $wpdb->prefix,
-                'blog_id' => get_current_blog_id(), 'tables' => $tables, 'uploads_included' => isset($assoc_args['uploads']),
-            ];
-            WP_CLI::log('Exporting users and site tables...');
-            $this->write_users($workspace . '/users.csv');
-            $this->write_tables($workspace . '/tables.sql', $tables);
-            $files = ['users.csv' => $workspace . '/users.csv', 'tables.sql' => $workspace . '/tables.sql'];
+            $uploads = null;
+            $excluded = [];
             if (isset($assoc_args['uploads'])) {
                 $uploads = wp_upload_dir(null, false);
                 if ($uploads['error']) {
                     throw new RuntimeException('Cannot read the source uploads directory.');
                 }
-                if (is_dir($uploads['basedir'])) {
-                    $files['wp-content/uploads'] = $uploads['basedir'];
-                }
+                $excluded = UploadExclusions::parse($assoc_args['exclude-upload-dirs'] ?? '', $uploads['basedir']);
+            }
+            if ($this->review !== null && !($this->review)([
+                'source' => home_url(), 'site_id' => get_current_blog_id(), 'tables' => $tables,
+                'output' => $output, 'uploads' => isset($assoc_args['uploads']),
+                'excluded_upload_directories' => $excluded,
+            ])) {
+                throw new RuntimeException('Export cancelled. No output file was created.');
+            }
+            fclose(Files::output($output));
+            $reserved = true;
+            foreach ($excluded as $directory) {
+                WP_CLI::log('Excluded upload directory (source unchanged): ' . Terminal::safe($directory));
+            }
+            $workspace = Files::workspace();
+            $meta = [
+                'url' => home_url(), 'name' => get_bloginfo('name'), 'admin_email' => get_bloginfo('admin_email'),
+                'site_language' => get_bloginfo('language'), 'db_prefix' => $wpdb->prefix,
+                'blog_id' => get_current_blog_id(), 'tables' => $tables, 'uploads_included' => isset($assoc_args['uploads']),
+                'excluded_upload_directories' => $excluded,
+            ];
+            WP_CLI::log('Exporting users and site tables...');
+            $this->write_users($workspace . '/users.csv');
+            $this->write_tables($workspace . '/tables.sql', $tables);
+            $files = ['users.csv' => $workspace . '/users.csv', 'tables.sql' => $workspace . '/tables.sql'];
+            if ($uploads !== null && is_dir($uploads['basedir'])) {
+                $files['wp-content/uploads'] = $uploads['basedir'];
             }
             Package::write($output, $files, $meta, $workspace);
         } catch (\Throwable $failure) {
@@ -166,6 +176,9 @@ class Export extends Command
 
     private function validate_options(array $options): void
     {
+        if (isset($options['exclude-upload-dirs']) && !isset($options['uploads'])) {
+            throw new RuntimeException('--exclude-upload-dirs requires --uploads.');
+        }
         if (!empty($options['usersuffix'])) {
             throw new RuntimeException('SSO user_login values must not be changed; --usersuffix is unsupported.');
         }

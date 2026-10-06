@@ -83,6 +83,8 @@ final class Wizard extends Command
         $options = $tables === '' ? [] : ['custom-tables' => $tables];
         if ($media === 'yes') {
             $options['uploads'] = true;
+            $terminal->line('Upload directories are included unless explicitly excluded. Server configuration and executable files block the export.');
+            $options['exclude-upload-dirs'] = $terminal->ask('Upload subdirectories to exclude, comma-separated (optional; e.g. wp-migrate-db)');
         }
         (new Export(static function (array $plan) use ($terminal): bool {
             $terminal->line('Export plan');
@@ -92,6 +94,7 @@ final class Wizard extends Command
                 $terminal->line('Table: ' . $table);
             }
             $terminal->line('Uploads: ' . ($plan['uploads'] ? 'included' : 'NOT included; separate transfer required'));
+            $terminal->line('Excluded upload directories: ' . (implode(', ', $plan['excluded_upload_directories']) ?: 'none'));
             $terminal->line('Plugins and themes must be provided separately. SSO logins stay unchanged; user credentials are excluded.');
             return $terminal->identity('Export source', $plan['source']) && $terminal->confirm('Create this export package now');
         }))->all([$file], $options);
@@ -130,6 +133,9 @@ final class Wizard extends Command
             $terminal->line('Existing global users remain unchanged; missing WordPress accounts receive random local passwords. This does not create SSO identities.');
             $terminal->line('The private package copy and journal are retained even after cancellation. A failed import may leave an incomplete site for manual recovery.');
             if (!$plan['uploads']['included'] && !$terminal->confirm('Media are absent; a separate transfer is not verified. Continue')) {
+                return false;
+            }
+            if (($plan['uploads']['excluded_directories'] ?? []) && !$terminal->confirm('Listed upload directories were excluded and will not be restored. Continue')) {
                 return false;
             }
             return $terminal->identity('New destination', $plan['destination']) && $terminal->confirm('Create the new website and execute this plan now');

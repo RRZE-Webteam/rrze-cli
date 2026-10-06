@@ -188,6 +188,32 @@ Ein Signaltest zeigte, dass blockierendes `fgets()` die Verarbeitung von PHP-Sig
 
 Die Pseudoterminal-Tests laufen in denselben isolierten WordPress-Kopien wie die übrigen Integrationstests. Sie benötigen Unix-PTY-Unterstützung. Die Terminalpfade der WP-CLI-Kindprozesse sind wie bisher nicht in der Unit-Coverage enthalten.
 
+## Gezielte Upload-Ausschlüsse
+
+Am 6. Oktober 2026 mit dieser Ergänzung erfolgreich ausgeführt: 140 Unit-Tests mit 218 Assertions unter PHP 8.5.10 und 40 Integrationstests mit 679 Assertions unter PHP 8.3.30, WP-CLI 2.12.0, WordPress 7.1.2 und MAMP MySQL 5.7.44. Der Integrationsbericht enthält keine Fehler, Fehlschläge oder übersprungenen Tests; die eigenen Testdatenbanken und das protokollierte Sandbox-Verzeichnis wurden bereinigt. Syntaxprüfung aller neun geänderten oder neuen PHP-Dateien, lokale Dokumentationslinks und `git diff --check` sind fehlerfrei.
+
+Die Unit-Zeilenabdeckung beträgt 512 von 1732 Zeilen (29,56 %), für die Paketprüfung 159 von 183 Zeilen (86,89 %) und für die Ausschlussregeln 22 von 23 Zeilen (95,65 %). Die WP-CLI-Kindprozesse bleiben außerhalb dieses Coverage-Werts.
+
+Eine zusätzliche Regression bildet ein Plugin-Arbeitsverzeichnis `wp-migrate-db` mit `.htaccess`, `index.php` und einer synthetischen Sicherungsdatei ab. Ohne ausdrücklichen Ausschluss muss der Export mit dem konkreten Dateipfad abbrechen und die unvollständige Ausgabedatei entfernen. Mit `--uploads --exclude-upload-dirs=wp-migrate-db` oder der entsprechenden Wizard-Eingabe wird ausschließlich dieses Verzeichnis ausgelassen; `wp-migrate-db-keep` und normale Medien bleiben enthalten. Quelle und Kontrollwebsite werden vor und nach dem vollständigen Export/Import verglichen.
+
+Der Test prüft den Eintrag im Paketmanifest und JSON-Plan sowie die zusätzliche Zustimmung im Import-Wizard. Eine leere Zustimmung verändert keine Zieldaten. Der folgende bestätigte Import muss normale Medien korrekt übertragen und darf das ausgeschlossene Verzeichnis nicht anlegen.
+
+Unit-Tests prüfen zusätzlich Verzeichnisgrenzen, Pfadtraversal, absolute Pfade, unbekannte und symbolisch verlinkte Verzeichnisse sowie widersprüchliche Manifeste, die angeblich ausgeschlossene Dateien dennoch enthalten. Fehlerausgaben nennen den betroffenen Paketpfad ohne rohe Terminal-Steuerzeichen. Die vorhandenen Regeln gegen ausführbare Dateien, Serverkonfiguration und unsichere Archivpfade bleiben aktiv.
+
+## Lange SQL-Werte
+
+Am 6. Oktober 2026 erfolgreich ausgeführt: 157 Unit-Tests mit 251 Assertions unter PHP 8.5.10 und 42 Integrationstests mit 720 Assertions unter PHP 8.3.30, WP-CLI 2.12.0, WordPress 7.1.2 und MAMP MySQL 5.7.44. Der Integrationsbericht enthält keine Fehler, Fehlschläge oder übersprungenen Tests; Testdatenbanken und Sandbox-Verzeichnis wurden bereinigt. Die Unit-Zeilenabdeckung beträgt 562 von 1781 Zeilen (31,56 %), für `Migration\Sql` 62 von 62 Zeilen (100 %). Die WP-CLI-Kindprozesse bleiben außerhalb der Unit-Coverage. Syntaxprüfung aller elf geänderten oder neuen PHP-Dateien, lokale Dokumentationslinks und `git diff --check` sind fehlerfrei.
+
+Die Meldung `Could not inspect SQL structure within parser limits.` ließ sich bei einem kontrollierten Export mit rund 3,6 MB SQL reproduzieren. Bereits einzelne lange Textwerte überforderten die bisherige Regex: PHP meldete je nach Laufzeit `Recursion limit exhausted` oder `JIT stack limit exhausted`. Die SQL-Datei lag dabei deutlich unter der Paketgrenze von 64 MiB.
+
+Die Strukturprüfung überspringt Zeichenketten und gewöhnliche Kommentare jetzt mit einem Scanner ohne Regex-Rekursion. Maskierte Bereiche behalten ihre Byte-Länge, sodass beim Umschreiben der Tabellennamen alle Nutzdaten einschließlich serialisierter Werte unverändert bleiben. Ausführbare MySQL-Versionskommentare bleiben für die Tabellenprüfung sichtbar; nicht abgeschlossene Zeichenketten oder Kommentare führen mit einer Byte-Position zum Abbruch, ohne deren Inhalt auszugeben. Regex-Fehler bei der anschließenden Tabellensuche brechen ebenfalls ausdrücklich ab. Paketgrenzen und Prüfung der erlaubten Tabellen bleiben aktiv.
+
+Die Unit-Regressionen verwenden Werte mit mehr als 1 MB, niedrige PCRE-Grenzen mit ein- und ausgeschaltetem JIT, Unicode, maskierte und verdoppelte Anführungszeichen, Backtick-Bezeichner und Kommentare. Sie prüfen außerdem, dass SQL-ähnlicher Text innerhalb eines Werts keine Tabellenzuordnung auslöst und fremde Tabellen hinter langen Werten oder in ausführbaren Kommentaren weiterhin abgewiesen werden. Der Scanner berücksichtigt die [MySQL-Regel für Kommentare mit zwei Bindestrichen](https://dev.mysql.com/doc/refman/8.0/en/ansi-diff-comments.html), damit eine Subtraktion wie `1--1` keine nachfolgenden Tabellenreferenzen verbirgt.
+
+Ein Integrationstest ergänzt ein gültiges synthetisches Paket um eine serialisierte WordPress-Option mit mehr als 1 MB. Er prüft den unverändernden Dry-run, einen vollständigen Import und den SHA-256-Wert der anschließend aus WordPress gelesenen Option. Quelle und Kontrollwebsite müssen unverändert bleiben. Ein weiterer Test prüft, dass nicht abgeschlossene SQL-Zeichenketten und Kommentare vor jeder Site-Anlage abgewiesen werden und Zieldatenbank sowie Uploads unverändert bleiben.
+
+Zusätzlich wurde die korrigierte SQL-Prüfung am ursprünglichen Archiv ausschließlich lesend ausgeführt: Alle 23 Tabellen stimmen mit dem Manifest überein. Eine Umbenennung auf synthetische Zieltabellen und die anschließende Rückumbenennung erhalten den SQL-Inhalt bytegenau. Das reale Paket wurde dabei nicht importiert; dieser Befund bestätigt die SQL-Prüfung, keinen vollständigen Import dieser Website.
+
 ## Nächste Erweiterungen
 
 Vollständige SQL-Isolation, konkurrierende Änderungen außerhalb der Migrationssperre, Erweiterungskompatibilität und reale SSO-Anmeldungen bleiben offen. Paket 5 ergänzt nachvollziehbare Abbruchzustände und die Wiederherstellung durch einen frischen Import nach manueller Löschung; der Umgang mit aktiven Kindprozessen und unabhängigen Netzwerksicherungen bleibt eine administrative Aufgabe. Paket 4 ergänzt Format-/Integritätsprüfung, Ressourcengrenzen und Prüfungen auf Restressourcen. Die vorhandenen SQL-Prüfungen sind keine Isolation für beliebige fremde SQL-Dateien. Die hier verifizierten Tests verwenden kontrollierte Exporte und gezielt veränderte synthetische Pakete. Ein tatsächlicher GitHub-CI-Lauf dieses Standes wurde in dieser Arbeit nicht durchgeführt.
