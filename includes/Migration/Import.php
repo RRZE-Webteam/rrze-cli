@@ -24,6 +24,10 @@ class Import extends Command
      * : Unsupported: a dump with DDL cannot be made atomic with this option.
      * [--uid_fields=<fields>]
      * : Comma-separated post meta keys containing numeric user IDs.
+     * [--dry-run]
+     * : Validate and display the migration plan without writing to the destination.
+     * [--format=<format>]
+     * : Dry-run output: text (default) or json.
      * [--verbose]
      * : Show progress details.
      */
@@ -42,80 +46,66 @@ class Import extends Command
                 throw new RuntimeException('--mysql-single-transaction cannot make a migration with DDL atomic and is no longer supported.');
             }
             if (!empty($assoc_args['new_url'])) {
-                $this->assert_available(SiteAddress::parse($assoc_args['new_url']));
+                Destination::available(SiteAddress::parse($assoc_args['new_url']));
             }
             $filename = $args[0] ?? '';
             $filename = str_starts_with($filename, '/') ? $filename : ABSPATH . $filename;
-            if (!Utils::is_zip_file($filename)) {
-                throw new RuntimeException('The provided file is not a readable ZIP package.');
-            }
             $workspace = Files::workspace();
-            WP_CLI::log('Checking migration package...');
-            Utils::extract($filename, $workspace);
-            $paths = [];
-            foreach (['json', 'csv', 'sql'] as $extension) {
-                $matches = glob($workspace . '/*.' . $extension);
-                if (count($matches) !== 1 || !is_file($matches[0])) {
-                    throw new RuntimeException('The package must contain exactly one metadata JSON, user CSV and SQL dump.');
+            $dryRun = isset($assoc_args['dry-run']);
+            $format = $assoc_args['format'] ?? 'text';
+            if (!in_array($format, ['text', 'json'], true) || (!$dryRun && $format !== 'text')) {
+                throw new RuntimeException('--format accepts text or json; JSON output requires --dry-run.');
+            }
+            if (!$dryRun || $format === 'text') {
+                WP_CLI::log('Checking migration package...');
+            }
+            $package = Package::read($filename, $workspace);
+            $plan = Preflight::build($package, $workspace, $assoc_args);
+            $address = $plan['target'];
+            if (!$dryRun) {
+                // This connection holds the lock through creation and import; no force/overwrite bypass.
+                $lockName = 'rrze-migration-' . substr(hash('sha256', DB_NAME . '|' . $address['domain'] . $address['path']), 0, 48);
+                if ((int) $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $lockName)) !== 1) {
+                    throw new RuntimeException('Another migration is using this destination, or the destination lock is unavailable.');
                 }
-                $paths[$extension] = $matches[0];
-            }
-            if (is_dir($workspace . '/wp-content/plugins') || is_dir($workspace . '/wp-content/themes')) {
-                throw new RuntimeException('Packages containing plugins or themes are not supported; provide these separately in the destination.');
-            }
-            $meta = json_decode(file_get_contents($paths['json']), true, 512, JSON_THROW_ON_ERROR);
-            if (!is_array($meta) || !is_string($meta['url'] ?? null) || !is_string($meta['db_prefix'] ?? null)
-                || !preg_match('/^[A-Za-z0-9_]+$/D', $meta['db_prefix'])
-                || !is_int($meta['blog_id'] ?? null) || $meta['blog_id'] < 1) {
-                throw new RuntimeException('Invalid migration metadata.');
-            }
-            $sourceAddress = SiteAddress::parse($meta['url']);
-            $address = SiteAddress::parse($assoc_args['new_url'] ?? $meta['url']);
-            $this->assert_available($address);
-            $sourceTables = $this->source_tables($paths['sql'], $meta);
-            $userPlan = Users::plan(Users::read($paths['csv']));
-            $fields = array_values(array_filter(array_map('trim', explode(',', $assoc_args['uid_fields'] ?? ''))));
-            foreach ($fields as $field) {
-                if (!preg_match('/^[A-Za-z0-9_.-]+$/D', $field)) {
-                    throw new RuntimeException('Invalid numeric user-reference meta key.');
+                $lock = $lockName;
+                // Rebuild from the validated private copy under the lock, immediately before writes.
+                $plan = Preflight::build($package, $workspace, $assoc_args);
+                $expectedId = $plan['destination']['estimated_site_id'];
+                $guard = static function ($site) use (&$blogId, $expectedId): void {
+                    $blogId = (int) $site->id;
+                    if ($blogId !== $expectedId) {
+                        throw new RuntimeException('The destination site allocation changed after preflight. Import stopped before initialization.');
+                    }
+                    Destination::resources($blogId);
+                };
+                // wp_insert_site fires this before its initialization hook can touch old tables or memberships.
+                add_action('wp_insert_site', $guard, PHP_INT_MIN);
+                try {
+                    $result = wp_insert_site(['domain' => $address['domain'], 'path' => $address['path'], 'network_id' => get_current_network_id()]);
+                } finally {
+                    remove_action('wp_insert_site', $guard, PHP_INT_MIN);
                 }
-            }
-            // This connection holds the lock through creation and import; no force/overwrite bypass.
-            $lockName = 'rrze-migration-' . substr(hash('sha256', DB_NAME . '|' . $address['domain'] . $address['path']), 0, 48);
-            if ((int) $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $lockName)) !== 1) {
-                throw new RuntimeException('Another migration is using this destination, or the destination lock is unavailable.');
-            }
-            $lock = $lockName;
-            $this->assert_available($address);
-            $existingTables = $wpdb->get_col('SHOW TABLES');
-            if ($wpdb->last_error) {
-                throw new RuntimeException('Could not inspect existing destination tables.');
-            }
-            $result = wp_insert_site(['domain' => $address['domain'], 'path' => $address['path'], 'network_id' => get_current_network_id()]);
-            if (is_wp_error($result) || !$result) {
-                throw new RuntimeException('Could not create a new destination site.');
-            }
-            $blogId = (int) $result;
-            $prefix = $wpdb->get_blog_prefix($blogId);
-            $targetTables = array_map(static fn ($table) => $prefix . substr($table, strlen($meta['db_prefix'])), $sourceTables);
-            if (array_intersect($targetTables, $existingTables)) {
-                throw new RuntimeException('The new site would collide with pre-existing tables. Import stopped.');
-            }
-            WP_CLI::log('Importing tables into new site ' . $blogId . '...');
-            $this->import_tables($paths['sql'], $sourceTables, $targetTables, $meta, $sourceAddress, $address, $blogId);
-            $ids = $this->import_users($userPlan, $blogId);
-            Posts::remap($blogId, $ids, $fields);
-            if (is_dir($workspace . '/wp-content/uploads')) {
-                $this->move_uploads($workspace . '/wp-content/uploads', $blogId);
-            }
-            switch_to_blog($blogId);
-            try {
-                flush_rewrite_rules(false);
-                if ($wpdb->last_error) {
-                    throw new RuntimeException('Could not flush rewrite rules for the new site.');
+                if (is_wp_error($result) || !$result) {
+                    throw new RuntimeException('Could not create a new destination site.');
                 }
-            } finally {
-                restore_current_blog();
+                $blogId = (int) $result;
+                WP_CLI::log('Importing tables into new site ' . $blogId . '...');
+                $this->import_tables($workspace . '/tables.sql', array_keys($plan['mapping']), array_values($plan['mapping']), $plan['meta'], $plan['source'], $address, $blogId);
+                $ids = $this->import_users($plan['users'], $blogId);
+                Posts::remap($blogId, $ids, $plan['fields']);
+                if (is_dir($workspace . '/wp-content/uploads')) {
+                    $this->move_uploads($workspace . '/wp-content/uploads', $blogId, $plan['destination']['uploads_directory']);
+                }
+                switch_to_blog($blogId);
+                try {
+                    flush_rewrite_rules(false);
+                    if ($wpdb->last_error) {
+                        throw new RuntimeException('Could not flush rewrite rules for the new site.');
+                    }
+                } finally {
+                    restore_current_blog();
+                }
             }
         } catch (\Throwable $failure) {
             $error = $failure->getMessage();
@@ -137,7 +127,34 @@ class Import extends Command
             }
             WP_CLI::error($error);
         }
-        WP_CLI::success('All done, your new site is available at ' . $address['url']);
+        if ($dryRun) {
+            if ($format === 'json') {
+                WP_CLI::line(json_encode($plan['report'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+            } else {
+                self::show_plan($plan['report']);
+                WP_CLI::success('Dry-run complete. No site, users, tables or uploads were created.');
+            }
+        } else {
+            WP_CLI::success('All done, your new site is available at ' . $address['url']);
+        }
+    }
+
+    private static function show_plan(array $plan): void
+    {
+        WP_CLI::log('Source: ' . $plan['source']);
+        WP_CLI::log('Destination: ' . $plan['destination'] . ' (new site only; no overwrite)');
+        WP_CLI::log('Estimated site ID: ' . $plan['destination_details']['estimated_site_id']);
+        foreach ($plan['tables'] as $from => $to) {
+            WP_CLI::log('Table: ' . $from . ' -> ' . $to);
+        }
+        foreach ($plan['users'] as $user) {
+            WP_CLI::log('User: ' . $user['login'] . ' -> ' . $user['action'] . ' (' . $user['role'] . ')');
+        }
+        WP_CLI::log('Media: ' . $plan['uploads']['files'] . ' files, ' . $plan['uploads']['bytes'] . ' bytes');
+        WP_CLI::log('Upload destination: ' . $plan['destination_details']['uploads_directory']);
+        foreach ($plan['limitations'] as $limitation) {
+            WP_CLI::log('Note: ' . $limitation);
+        }
     }
 
     /** Direct imports are disabled; only import all can establish ownership of a new site. */
@@ -152,55 +169,11 @@ class Import extends Command
         WP_CLI::error('Direct table imports are disabled. Use rrze-migration import all to create a new site.');
     }
 
-    private function assert_available(array $address): void
-    {
-        global $wpdb;
-        // Query all networks and all statuses, including deleted/archived entries.
-        $existing = $wpdb->get_var($wpdb->prepare("SELECT blog_id FROM {$wpdb->blogs} WHERE domain = %s AND path = %s LIMIT 1", $address['domain'], $address['path']));
-        if ($wpdb->last_error) {
-            throw new RuntimeException('Could not check whether the destination exists.');
-        }
-        if ($existing !== null) {
-            throw new RuntimeException('The destination site already exists. Delete it manually in Network Admin before importing. Existing sites are never overwritten.');
-        }
-    }
-
-    private function source_tables(string $filename, array $meta): array
-    {
-        global $wpdb;
-        $sql = file_get_contents($filename);
-        if ($sql === false || $sql === '') {
-            throw new RuntimeException('The SQL dump is unreadable or empty.');
-        }
-        preg_match_all('/^CREATE TABLE(?: IF NOT EXISTS)? `([A-Za-z0-9_]+)`/m', $sql, $matches);
-        $tables = $matches[1];
-        if (!$tables || count($tables) !== count(array_unique($tables))) {
-            throw new RuntimeException('The SQL dump has missing or duplicate table definitions.');
-        }
-        $prefix = $meta['db_prefix'];
-        $base = $meta['blog_id'] > 1 ? preg_replace('/' . $meta['blog_id'] . '_$/D', '', $prefix) : $prefix;
-        $globals = array_map(static fn ($table) => $base . $table, $wpdb->tables('global', false));
-        Tables::select($tables, [], $globals, $prefix, $base, implode(',', $tables));
-        $core = array_map(static fn ($table) => $prefix . $table, $wpdb->tables('blog', false));
-        if (array_diff($core, $tables)) {
-            throw new RuntimeException('The SQL dump is missing required site tables.');
-        }
-        if (isset($meta['tables']) && (!is_array($meta['tables']) || array_diff($tables, $meta['tables']) || array_diff($meta['tables'], $tables))) {
-            throw new RuntimeException('The SQL table list does not match the package metadata.');
-        }
-        return $tables;
-    }
-
     private function import_tables(string $filename, array $sourceTables, array $targetTables, array $meta, array $source, array $target, int $blogId): void
     {
         global $wpdb;
         $mapping = array_combine($sourceTables, $targetTables);
-        $sql = preg_replace_callback('/\b(DROP TABLE IF EXISTS|CREATE TABLE(?: IF NOT EXISTS)?|LOCK TABLES|INSERT INTO|ALTER TABLE|REFERENCES)\s+`([^`]+)`/', static function ($match) use ($mapping) {
-            if (!isset($mapping[$match[2]])) {
-                throw new RuntimeException('The SQL dump refers to a table outside the source site.');
-            }
-            return $match[1] . ' `' . $mapping[$match[2]] . '`';
-        }, file_get_contents($filename));
+        $sql = Sql::map(file_get_contents($filename), $mapping);
         Files::write($filename, $sql);
         Utils::checked_command('db import', [$filename]);
         Utils::checked_command('search-replace', [Utils::parse_url_for_search_replace($source['url']), Utils::parse_url_for_search_replace($target['url']), ...$targetTables], ['precise' => true], ['url' => $target['url']]);
@@ -214,6 +187,12 @@ class Import extends Command
             }
             wp_cache_delete('alloptions', 'options');
             wp_cache_delete('notoptions', 'options');
+            foreach (['upload_path', 'upload_url_path'] as $option) {
+                update_option($option, '');
+                if (get_option($option) !== '') {
+                    throw new RuntimeException('Could not reset the source upload path for the new site.');
+                }
+            }
             foreach (['home', 'siteurl'] as $option) {
                 update_option($option, untrailingslashit($target['url']));
                 if (get_option($option) !== untrailingslashit($target['url']) || $wpdb->last_error) {
@@ -260,13 +239,19 @@ class Import extends Command
         return $ids;
     }
 
-    private function move_uploads(string $source, int $blogId): void
+    private function move_uploads(string $source, int $blogId, string $expectedPath): void
     {
         switch_to_blog($blogId);
         try {
-            $uploads = wp_upload_dir();
+            $uploads = wp_upload_dir(null, false, true);
+            if ($uploads['basedir'] !== $expectedPath || Destination::uploadPath($blogId) !== $expectedPath) {
+                throw new RuntimeException('The destination upload path changed after preflight.');
+            }
             if ($uploads['error']) {
                 throw new RuntimeException('Cannot prepare the new site upload directory.');
+            }
+            if (!is_dir($expectedPath) && !mkdir($expectedPath, 0755, true)) {
+                throw new RuntimeException('Cannot create the new site upload directory.');
             }
             foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($source, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::SELF_FIRST) as $item) {
                 $relative = substr($item->getPathname(), strlen($source) + 1);
@@ -281,6 +266,9 @@ class Import extends Command
                 } else {
                     if (file_exists($destination) || !rename($item->getPathname(), $destination)) {
                         throw new RuntimeException('An upload file already exists or could not be moved.');
+                    }
+                    if (!chmod($destination, 0644)) {
+                        throw new RuntimeException('Cannot set permissions on an imported upload.');
                     }
                 }
             }

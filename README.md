@@ -6,6 +6,7 @@ WP-CLI extension for RRZE's CMS management.
 
 -   PHP >= 8.2
 -   WP-CLI >= 2.11.0
+-   PHP zip extension for migration packages
 
 ## Tests
 
@@ -35,6 +36,25 @@ wp rrze-migration export all website.zip --url=https://source.example.test/ --cu
 
 `--custom-tables` adds to the default selection. `--tables` selects an explicit list, but a full ZIP package must still contain every core site table. Global user/network tables and other sites' tables cannot be selected. Separate SQL and CSV exports remain available through `export tables` and `export users`.
 
+### Preflight and dry-run
+
+Validate a package and display the planned changes before importing:
+
+```sh
+wp rrze-migration import all website.zip --new_url=https://target.example.test/new-site/ --dry-run
+wp rrze-migration import all website.zip --new_url=https://target.example.test/new-site/ --dry-run --format=json
+```
+
+Both commands use the same preflight as execution. The plan shows the source and destination, estimated site ID, table mapping, existing/new WordPress user actions, media files and destination storage. A dry-run creates only private temporary extraction files and removes them afterwards; it does not create sites, users, tables or destination uploads. Normal WordPress/plugin bootstrap still runs. JSON plans include SSO logins and local paths; treat saved plans as internal operational data.
+
+The next site ID is an estimate, not a reservation. Execution rebuilds the plan under the migration lock and checks the allocated ID before WordPress initializes it. Existing tables, upload directories (even empty ones), links or membership metadata for that ID block the import. Nothing is automatically removed. A conflict discovered after the site row was inserted retains that incomplete row for manual inspection.
+
+Packages use format version 1 in `site.json`, with exact filenames, sizes and SHA-256 hashes for `users.csv`, `tables.sql` and every included upload. Unsupported/unversioned packages must be exported again. Checksums detect transfer damage and changed contents; they do not authenticate the producer or make arbitrary SQL safe. Unexpected entries, path collisions, links, encrypted archives and server-executable upload files are rejected before import.
+
+Current bounds: 2 GiB ZIP, 4 GiB expanded data, 100,000 entries, 512 MiB per media file, 64 MiB SQL, 16 MiB CSV, 4 MiB metadata and 10,000 users. Entries larger than 1 MiB must not exceed a 200:1 compression ratio. Available PHP memory, temporary storage and upload storage are checked conservatively; these checks cannot reserve capacity or determine free space on the database server.
+
+Destination preflight requires explicit database/schema grants sufficient for the migration. Grants available only through roles or individual tables are not yet supported. Standard multisite uploads under `wp-content/uploads/sites/<ID>` are supported; custom upload paths, upload filters and legacy `ms-files.php` layouts need a migration adapter and currently block the import. Source upload path options are reset for the newly created destination.
+
 ### Import
 
 Run from the destination WordPress directory. Use the global `--url` to select the destination network context when needed.
@@ -45,7 +65,7 @@ wp rrze-migration import all website.zip --new_url=https://target.example.test/n
 
 User matching uses the exact SSO `user_login`; the company email must agree. Conflicting logins/emails, duplicate CSV identities and unknown destination roles stop the import before a new site is created. New WordPress users receive a fresh random local password; this does not provision an SSO account. Existing global user profiles, passwords and memberships on other sites are preserved. Only the new site's membership is added.
 
-User CSV exports exclude passwords, reset keys, application passwords, sessions and global permission fields, including attempts to add these through export filters. Legacy credential fields are discarded on import. New users receive the supported standard profile fields; arbitrary custom user metadata and former import hooks are not replayed.
+User CSV exports exclude passwords, reset keys, application passwords, sessions and global permission fields, including attempts to add these through export filters. Legacy credential fields inside a supported versioned package are discarded on import. New users receive the supported standard profile fields; arbitrary custom user metadata and former import hooks are not replayed.
 
 Database export/import and URL replacement run in child processes. A failed command stops the migration with a nonzero status. A partially created site is retained for inspection and must be deleted manually before a retry. The import never removes sites or global users automatically.
 
@@ -56,4 +76,4 @@ Database export/import and URL replacement run in child processes. A failed comm
 - `--plugins` and `--themes`, including legacy packages containing their code, are rejected. Provide dependencies separately in the destination.
 - `--mysql-single-transaction` is rejected: wrapping a dump containing DDL does not make the migration atomic.
 
-Use packages from controlled exports only. Current SQL table checks are not a sandbox for arbitrary SQL. Full package validation, resource limits, interrupted-run recovery, extension compatibility, complete concurrency coverage and real SSO acceptance remain part of the following work packages. An import without packaged media does not verify a separate media transfer.
+Use packages from controlled exports only. Current SQL table checks are not a sandbox for arbitrary SQL. Full SQL isolation, interrupted-run recovery, extension compatibility, complete concurrency coverage and real SSO acceptance remain part of the following work packages. A successful dry-run does not execute SQL and cannot guarantee a successful import. An import without packaged media does not verify a separate media transfer.

@@ -50,15 +50,15 @@ class Export extends Command
             fclose(Files::output($output));
             $reserved = true;
             $workspace = Files::workspace();
-            Files::write($workspace . '/site.json', wp_json_encode([
+            $meta = [
                 'url' => home_url(), 'name' => get_bloginfo('name'), 'admin_email' => get_bloginfo('admin_email'),
                 'site_language' => get_bloginfo('language'), 'db_prefix' => $wpdb->prefix,
-                'blog_id' => get_current_blog_id(), 'tables' => $tables,
-            ], JSON_THROW_ON_ERROR));
+                'blog_id' => get_current_blog_id(), 'tables' => $tables, 'uploads_included' => isset($assoc_args['uploads']),
+            ];
             WP_CLI::log('Exporting users and site tables...');
             $this->write_users($workspace . '/users.csv');
             $this->write_tables($workspace . '/tables.sql', $tables);
-            $files = ['site.json' => $workspace . '/site.json', 'users.csv' => $workspace . '/users.csv', 'tables.sql' => $workspace . '/tables.sql'];
+            $files = ['users.csv' => $workspace . '/users.csv', 'tables.sql' => $workspace . '/tables.sql'];
             if (isset($assoc_args['uploads'])) {
                 $uploads = wp_upload_dir(null, false);
                 if ($uploads['error']) {
@@ -68,7 +68,7 @@ class Export extends Command
                     $files['wp-content/uploads'] = $uploads['basedir'];
                 }
             }
-            Utils::zip($output, $files);
+            Package::write($output, $files, $meta, $workspace);
         } catch (\Throwable $failure) {
             $error = $failure->getMessage();
         } finally {

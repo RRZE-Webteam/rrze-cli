@@ -38,6 +38,34 @@ final class MigrationTest extends TestCase
         self::assertSame($before, self::$sandbox->fixture('target', 'snapshot', ['2']));
     }
 
+    public function testDryRunReportsMappingsWithoutChangingDatabaseOrUploads(): void
+    {
+        self::$sandbox->exportPackage();
+        $before = self::$sandbox->fixture('target', 'state');
+        $files = $this->uploadsSnapshot();
+        $args = ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/planned/', '--dry-run'];
+        $json = self::$sandbox->wp('target', [...$args, '--format=json']);
+        $plan = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('create_new_site', $plan['action']);
+        self::assertFalse($plan['overwrite']);
+        self::assertSame(3, $plan['destination_details']['estimated_site_id']);
+        self::assertSame('dst_3_posts', $plan['tables']['src_2_posts']);
+        $users = array_column($plan['users'], null, 'login');
+        self::assertSame('add_site_membership', $users['sso0001']['action']);
+        self::assertSame(4, $users['sso0001']['target_id']);
+        self::assertSame('create_wordpress_user', $users['sso0002']['action']);
+        self::assertTrue($plan['uploads']['included']);
+        self::assertGreaterThan(0, $plan['uploads']['files']);
+        self::assertStringNotContainsString('user_pass', $json);
+        self::assertStringNotContainsString('synthetic-session-secret', $json);
+        $text = self::$sandbox->wp('target', $args);
+        self::assertStringContainsString('Dry-run complete', $text);
+        self::assertStringContainsString('no overwrite', $text);
+        self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        self::assertSame($files, $this->uploadsSnapshot());
+        $this->assertWorkspaceClean();
+    }
+
     public function testExportImportPreservesContentAndProtectsExistingSiteAndUsers(): void
     {
         $sourceBefore = self::$sandbox->fixture('source', 'snapshot', ['2']);
@@ -45,12 +73,15 @@ final class MigrationTest extends TestCase
         $usersBefore = self::$sandbox->fixture('target', 'users');
         $source = self::$sandbox->fixture('source', 'content', ['2']);
         self::$sandbox->exportPackage();
+        $plan = json_decode(self::$sandbox->wp('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/imported/', '--uid_fields=_fixture_user', '--dry-run', '--format=json']), true, 512, JSON_THROW_ON_ERROR);
         self::$sandbox->wp('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/imported/', '--uid_fields=_fixture_user']);
         $sites = self::$sandbox->fixture('target', 'sites');
         $imported = array_values(array_filter($sites, fn ($site) => $site['path'] === '/imported/'));
         self::assertCount(1, $imported);
         $id = $imported[0]['id'];
         self::assertNotSame(2, $id, 'The control site must not be reused.');
+        self::assertSame($plan['destination_details']['estimated_site_id'], $id);
+        self::assertSame([], array_diff(array_values($plan['tables']), array_keys(self::$sandbox->fixture('target', 'state'))));
         $content = self::$sandbox->fixture('target', 'content', [(string) $id]);
         self::assertSame($source['title'], $content['title']);
         self::assertSame(str_replace('http://source.test/source/', 'http://target.test/imported/', $source['content']), $content['content']);
@@ -226,7 +257,7 @@ PHP);
 
     public function testMalformedPackagesAndGlobalSqlAreRejectedBeforeSiteCreation(): void
     {
-        foreach (['csv', 'metadata', 'global-table', 'code', 'traversal'] as $case) {
+        foreach (['csv', 'metadata', 'global-table', 'foreign-reference', 'code', 'traversal'] as $case) {
             $name = $this->modifiedPackage(static function (ZipArchive $zip) use ($case) {
                 if ($case === 'csv') {
                     $zip->addFromString('users.csv', "ID,user_login,user_email,role\n1,broken\n");
@@ -234,6 +265,8 @@ PHP);
                     $zip->addFromString('site.json', '{broken');
                 } elseif ($case === 'global-table') {
                     $zip->addFromString('tables.sql', $zip->getFromName('tables.sql') . "\nCREATE TABLE `src_users` (`ID` bigint);\n");
+                } elseif ($case === 'foreign-reference') {
+                    $zip->addFromString('tables.sql', $zip->getFromName('tables.sql') . "\nINSERT INTO `dst_users` VALUES (1);\n");
                 } elseif ($case === 'code') {
                     $zip->addFromString('wp-content/plugins/unwanted/plugin.php', '<?php');
                 } else {
@@ -282,6 +315,130 @@ PHP);
         }
     }
 
+    public function testCorruptChecksumsAndUnsupportedVersionsBlockDryRunAndImport(): void
+    {
+        foreach (['checksum', 'version', 'unversioned'] as $case) {
+            $name = $this->modifiedPackage(static function (ZipArchive $zip) use ($case) {
+                if ($case === 'checksum') {
+                    $zip->addFromString('users.csv', str_replace('sso0001', 'sso0099', $zip->getFromName('users.csv')));
+                } else {
+                    $meta = json_decode($zip->getFromName('site.json'), true);
+                    $meta['format_version'] = $case === 'version' ? 999 : null;
+                    $zip->addFromString('site.json', json_encode($meta));
+                }
+            }, false);
+            $this->assertRejected($name, 'http://target.test/package-conflict/');
+            $before = self::$sandbox->fixture('target', 'state');
+            $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $name, '--new_url=http://target.test/package-conflict/', '--dry-run', '--format=json']);
+            self::assertNotSame(0, $result['code']);
+            self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        }
+    }
+
+    public function testOrphanTablesFilesAndMembershipsBlockBeforeSiteCreation(): void
+    {
+        self::$sandbox->exportPackage();
+        foreach (['table', 'files', 'membership'] as $kind) {
+            self::$sandbox->fixture('target', 'leftover', [$kind, 'create']);
+            try {
+                $files = $this->uploadsSnapshot();
+                $this->assertRejected('fixture.zip', 'http://target.test/orphan/', 'Pre-existing');
+                $before = self::$sandbox->fixture('target', 'state');
+                $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/orphan/', '--dry-run']);
+                self::assertNotSame(0, $result['code']);
+                self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+                self::assertSame($files, $this->uploadsSnapshot());
+            } finally {
+                self::$sandbox->fixture('target', 'leftover', [$kind, 'remove']);
+            }
+        }
+    }
+
+    public function testUnwritableUploadsAndUnverifiableGrantsBlockBeforeSiteCreation(): void
+    {
+        $directory = self::$sandbox->root . '/target/wp-content/uploads/sites';
+        chmod($directory, 0500);
+        try {
+            $this->assertRejected('fixture.zip', 'http://target.test/permissions/', 'not writable');
+        } finally {
+            chmod($directory, 0755);
+        }
+        $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/limited-grants.php';
+        file_put_contents($hook, <<<'PHPHOOK'
+<?php
+add_filter('query', static fn ($query) => $query === 'SHOW GRANTS FOR CURRENT_USER()' ? "SELECT 'GRANT SELECT ON *.* TO fixture'" : $query);
+PHPHOOK);
+        try {
+            $this->assertRejected('fixture.zip', 'http://target.test/permissions/', 'database permissions');
+        } finally {
+            unlink($hook);
+        }
+    }
+
+    public function testUploadsAtTheMediaRootBecomeReadableOutsideThePrivateWorkspace(): void
+    {
+        $name = $this->modifiedPackage(static function (ZipArchive $zip) {
+            $remove = [];
+            for ($index = 0; $index < $zip->numFiles; $index++) {
+                $entry = $zip->getNameIndex($index);
+                if (str_starts_with($entry, 'wp-content/uploads/')) {
+                    $remove[] = $entry;
+                }
+            }
+            foreach ($remove as $entry) {
+                $zip->deleteName($entry);
+            }
+            $zip->addFromString('wp-content/uploads/root-media.txt', 'public fixture media');
+        });
+        self::$sandbox->wp('target', ['rrze-migration', 'import', 'all', $name, '--new_url=http://target.test/root-media/']);
+        $site = array_values(array_filter(self::$sandbox->fixture('target', 'sites'), fn ($site) => $site['path'] === '/root-media/'))[0];
+        $file = self::$sandbox->root . '/target/wp-content/uploads/sites/' . $site['id'] . '/root-media.txt';
+        self::assertSame('public fixture media', file_get_contents($file));
+        self::assertSame(0644, fileperms($file) & 0777);
+        $this->assertWorkspaceClean();
+    }
+
+    public function testLateTableConflictIsCheckedBeforeWordPressInitialization(): void
+    {
+        $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/late-conflict.php';
+        file_put_contents($hook, <<<'PHPHOOK'
+<?php
+add_action('wp_insert_site', static function ($site) {
+    global $wpdb;
+    $prefix = $wpdb->get_blog_prefix($site->id);
+    $wpdb->query("CREATE TABLE `{$prefix}options` (marker varchar(40))");
+    $wpdb->query("INSERT INTO `{$prefix}options` VALUES ('protected late orphan')");
+}, PHP_INT_MIN);
+PHPHOOK);
+        $users = self::$sandbox->fixture('target', 'users');
+        $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
+        try {
+            $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/late-conflict/']);
+            self::assertNotSame(0, $result['code']);
+            self::assertStringContainsString('Pre-existing tables', $result['stderr']);
+            self::assertStringContainsString('may be incomplete', $result['stderr']);
+            self::assertSame($users, self::$sandbox->fixture('target', 'users'));
+            self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
+            $site = array_values(array_filter(self::$sandbox->fixture('target', 'sites'), fn ($site) => $site['path'] === '/late-conflict/'))[0];
+            $value = self::$sandbox->wp('target', ['db', 'query', 'SELECT marker FROM dst_' . $site['id'] . '_options', '--skip-column-names']);
+            self::assertStringContainsString('protected late orphan', $value);
+            $this->assertWorkspaceClean();
+        } finally {
+            unlink($hook);
+        }
+    }
+
+    private function uploadsSnapshot(): array
+    {
+        $root = self::$sandbox->root . '/target/wp-content/uploads';
+        $result = [];
+        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST) as $file) {
+            $result[substr($file->getPathname(), strlen($root))] = $file->isDir() ? 'directory' : hash_file('sha256', $file->getPathname());
+        }
+        ksort($result);
+        return $result;
+    }
+
     private function assertRejected(string $package, string $url, string $message = ''): void
     {
         $before = self::$sandbox->fixture('target', 'state');
@@ -300,7 +457,7 @@ PHP);
         self::assertSame([], glob(self::$sandbox->root . '/rrze-migration-*'));
     }
 
-    private function modifiedPackage(callable $modify): string
+    private function modifiedPackage(callable $modify, bool $refreshManifest = true): string
     {
         $original = self::$sandbox->exportPackage();
         $name = 'modified-' . bin2hex(random_bytes(5)) . '.zip';
@@ -310,6 +467,20 @@ PHP);
         self::assertTrue($zip->open($path));
         try {
             $modify($zip);
+            if ($refreshManifest) {
+                $meta = json_decode($zip->getFromName('site.json'), true);
+                if (is_array($meta)) {
+                    $meta['files'] = [];
+                    for ($index = 0; $index < $zip->numFiles; $index++) {
+                        $entry = $zip->getNameIndex($index);
+                        if ($entry !== false && $entry !== 'site.json' && !str_ends_with($entry, '/')) {
+                            $data = $zip->getFromName($entry);
+                            $meta['files'][$entry] = ['bytes' => strlen($data), 'sha256' => hash('sha256', $data)];
+                        }
+                    }
+                    $zip->addFromString('site.json', json_encode($meta, JSON_THROW_ON_ERROR));
+                }
+            }
         } finally {
             self::assertTrue($zip->close());
         }

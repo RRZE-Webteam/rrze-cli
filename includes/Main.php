@@ -25,18 +25,13 @@ class Main
             return;
         }
 
-        // Output the WP_CLI version
-        $wpcliVersion = WP_CLI::runcommand('cli version', ['return' => true]);
-        WP_CLI::log(trim($wpcliVersion));
-
-        // Get the current working directoryclear
+        // Keep standard output available for machine-readable command results.
         $currentDir = getcwd();
         if (false === $currentDir) {
             WP_CLI::error(__('Unable to determine the current working directory.', 'rrze-cli'));
         }
 
-        // Output the current directory
-        WP_CLI::log("Current directory: " . $currentDir);
+        WP_CLI::debug('Current directory: ' . $currentDir, 'rrze-cli');
 
         // Check if the command is running in the main directory of WordPress
         if (!file_exists($currentDir . '/wp-load.php')) {

@@ -144,11 +144,46 @@ $result = match ($action) {
             $result[$table] = hash('sha256', wp_json_encode($rows));
             if (str_ends_with($table, '_options')) {
                 foreach ($rows as $row) {
-                    $result[$table . ':' . $row['option_name']] = hash('sha256', wp_json_encode($row));
+                    if (isset($row['option_name'])) {
+                        $result[$table . ':' . $row['option_name']] = hash('sha256', wp_json_encode($row));
+                    }
                 }
             }
         }
         return $result;
+    })(),
+    'leftover' => (function () use ($args) {
+        global $wpdb;
+        $id = (int) $wpdb->get_var($wpdb->prepare('SELECT AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s', DB_NAME, $wpdb->blogs));
+        $prefix = $wpdb->get_blog_prefix($id);
+        $kind = $args[1];
+        $create = $args[2] === 'create';
+        if ($kind === 'table') {
+            if ($create) {
+                $wpdb->query("CREATE TABLE `{$prefix}options` (marker varchar(40))");
+                $wpdb->query("INSERT INTO `{$prefix}options` VALUES ('protected orphan')");
+            } else {
+                $wpdb->query("DROP TABLE `{$prefix}options`");
+            }
+        } elseif ($kind === 'files') {
+            $path = WP_CONTENT_DIR . '/uploads/sites/' . $id;
+            if ($create) {
+                mkdir($path, 0755, true);
+                file_put_contents($path . '/protected.txt', 'protected orphan');
+            } else {
+                unlink($path . '/protected.txt');
+                rmdir($path);
+            }
+        } elseif ($kind === 'membership') {
+            if ($create) {
+                update_user_meta(4, $prefix . 'capabilities', ['subscriber' => true]);
+            } else {
+                delete_user_meta(4, $prefix . 'capabilities');
+            }
+        } else {
+            throw new RuntimeException('Unknown leftover fixture.');
+        }
+        return ['site_id' => $id];
     })(),
     'status' => (function () use ($args) {
         $field = $args[1];

@@ -25,7 +25,7 @@ final class Users
         return array_values(array_filter(array_unique(array_merge(self::HEADERS, $custom)), static fn ($field) => !self::forbidden($field)));
     }
 
-    public static function read(string $filename): array
+    public static function read(string $filename, int $maxRows = 10000): array
     {
         $handle = @fopen($filename, 'rb');
         if (!$handle) {
@@ -40,6 +40,9 @@ final class Users
             $rows = [];
             $ids = $logins = $emails = [];
             while (($data = fgetcsv($handle, 0, ',', '"', '\\')) !== false) {
+                if (count($rows) >= $maxRows) {
+                    throw new RuntimeException('The user CSV exceeds the supported user count limit.');
+                }
                 if (count($data) !== count($headers)) {
                     throw new RuntimeException('Malformed user CSV row.');
                 }

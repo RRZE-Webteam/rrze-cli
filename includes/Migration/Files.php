@@ -6,6 +6,35 @@ use RuntimeException;
 
 final class Files
 {
+    public static function memory(int $required): void
+    {
+        $limit = ini_get('memory_limit');
+        if ($limit !== false && $limit !== '-1' && $required > ini_parse_quantity($limit) - memory_get_usage(true)) {
+            throw new RuntimeException('Insufficient PHP memory budget for migration preflight.');
+        }
+    }
+
+    /** Check the nearest existing parent without creating directories or probe files. */
+    public static function capacity(string $path, int $required): array
+    {
+        $parent = $path;
+        while (!file_exists($parent) && !is_link($parent)) {
+            $next = dirname($parent);
+            if ($next === $parent) {
+                throw new RuntimeException('Cannot find the destination filesystem.');
+            }
+            $parent = $next;
+        }
+        if (!is_dir($parent) || !is_writable($parent)) {
+            throw new RuntimeException('The migration filesystem is not writable.');
+        }
+        $available = disk_free_space($parent);
+        if ($available === false || $available < $required) {
+            throw new RuntimeException('Insufficient or unknown free disk space for migration.');
+        }
+        return ['required_bytes' => $required, 'available_bytes' => (int) $available];
+    }
+
     public static function workspace(): string
     {
         $path = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . '/rrze-migration-' . bin2hex(random_bytes(16));

@@ -119,6 +119,24 @@ Die Unterbefehle laufen jetzt grundsätzlich in Kindprozessen: Ein nativer Exit 
 
 Unit-Coverage: 141 von 894 Zeilen (15,77 %). Die neuen Regeln für Tabellenauswahl sind zu 91,67 %, die URL-Identitätsprüfung zu 100 % und die Benutzer-/CSV-Regeln einschließlich ihres WordPress-Adapters zu 74,47 % zeilenweise durch Unit-Tests erfasst. Der Integrationstest prüft zusätzlich die tatsächlichen WP-CLI-Abläufe; seine Kindprozesse sind weiterhin nicht im Coverage-Prozentwert enthalten. Die Prozentwerte allein belegen keine vollständige Sicherheitsabdeckung.
 
+## Lokal verifizierter Stand von Paket 4
+
+Am 6. Oktober 2026 erfolgreich ausgeführt:
+
+- 105 Unit-Tests mit 144 Assertions unter PHP 8.5.10.
+- 20 Integrationstests mit 283 Assertions unter PHP 8.3.30, WP-CLI 2.12.0, WordPress 7.1.2 und MAMP MySQL 5.7.44.
+- Unit-Coverage mit PCOV: 304 von 1206 Zeilen (25,21 %). Die WP-CLI-Kindprozesse der Integrationstests sind darin weiterhin nicht enthalten.
+- Syntaxprüfung aller 13 geänderten oder neuen PHP-Dateien sowie `git diff --check` ohne Fehler.
+- Vollständiger Export/Import im neuen Paketformat, beide Dry-run-Ausgaben, unveränderte Kontrollwebsite und globale Bestandskonten sowie Bereinigung der eigenen Testdatenbanken und Arbeitsverzeichnisse.
+
+`import all --dry-run` durchläuft dieselbe Paket-, Tabellen-, Benutzer- und Zielprüfung wie die Ausführung. Der Integrationstest liest den JSON-Plan direkt als JSON und vergleicht Tabellen- und Benutzerzuordnung mit dem anschließenden Import. Vor und nach beiden Dry-run-Ausgabeformaten werden sämtliche Zieltabellen und die Upload-Verzeichnisse verglichen. Die allgemeine Startausgabe des Plugins wird nicht mehr auf Standardausgabe geschrieben, damit maschinenlesbare Ergebnisse verwendbar bleiben.
+
+Die neuen Tests decken Formatversionen und Prüfsummen, unerwartete und mehrdeutige Pfade, Links, Verschlüsselung, Größen- und Kompressionsgrenzen sowie Datei-, Speicher- und Rechteprüfungen ab. Veränderte CSV-/SQL-Testpakete erhalten gezielt ein aktualisiertes Manifest, damit die fachliche Vorprüfung zusätzlich zur Integritätsprüfung getestet wird. Eigene Beschädigungstests lassen die Prüfsummen unverändert und müssen daran scheitern.
+
+Resttabellen, Upload-Verzeichnisse und alte Mitgliedschaftsschlüssel der nächsten Site-ID blockieren bereits die Vorprüfung. Ein zusätzlicher Test erzeugt eine Resttabelle zwischen der Site-Anlage und der WordPress-Initialisierung: Der Import muss vor dem Initialisieren abbrechen und den fremden Tabelleninhalt erhalten. Die nur teilweise angelegte Site wird weiterhin nicht automatisch gelöscht. Medien direkt im Upload-Hauptverzeichnis und ihre endgültigen Dateirechte erhalten einen eigenen Integrationstest.
+
+Die Berechtigungsprüfung berücksichtigt explizite Schema-Grants einschließlich maskierter Unterstriche und MySQLs `partial_revokes`-Semantik; reine Rollen- oder Tabellen-Grants werden konservativ abgelehnt. Die hier simulierten eingeschränkten Rechte ergänzen den echten eingeschränkten MAMP-Testbenutzer. Produktionsrechte und Datenbankserver-Speicherplatz werden dadurch nicht als geprüft ausgegeben.
+
 ## Nächste Erweiterungen
 
-Die vollständige Paket- und SQL-Validierung, Ressourcenlimits, Wiederherstellung nach harten Abbrüchen, Konflikte mit vorhandenen Restressourcen, konkurrierende Änderungen außerhalb der Migrationssperre, Erweiterungskompatibilität und reale SSO-Anmeldungen bleiben offen. Die vorhandenen SQL-Prüfungen sind keine Isolation für beliebige fremde SQL-Dateien. Die hier verifizierten Tests verwenden kontrollierte Exporte und gezielt veränderte synthetische Pakete. Ein tatsächlicher GitHub-CI-Lauf dieses Standes wurde in dieser Arbeit nicht durchgeführt.
+Vollständige SQL-Isolation, Wiederherstellung nach harten Abbrüchen, konkurrierende Änderungen außerhalb der Migrationssperre, Erweiterungskompatibilität und reale SSO-Anmeldungen bleiben offen. Paket 4 ergänzt Format-/Integritätsprüfung, Ressourcengrenzen und Prüfungen auf Restressourcen. Die vorhandenen SQL-Prüfungen sind keine Isolation für beliebige fremde SQL-Dateien. Die hier verifizierten Tests verwenden kontrollierte Exporte und gezielt veränderte synthetische Pakete. Ein tatsächlicher GitHub-CI-Lauf dieses Standes wurde in dieser Arbeit nicht durchgeführt.
