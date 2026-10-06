@@ -36,6 +36,21 @@ wp rrze-migration export all website.zip --url=https://source.example.test/ --cu
 
 `--custom-tables` adds to the default selection. `--tables` selects an explicit list, but a full ZIP package must still contain every core site table. Global user/network tables and other sites' tables cannot be selected. Separate SQL and CSV exports remain available through `export tables` and `export users`.
 
+### Interactive wizard
+
+Run the wizard from the relevant WordPress directory in an interactive terminal:
+
+```sh
+wp rrze-migration wizard export --url=https://source.example.test/site/
+wp rrze-migration wizard import
+```
+
+The export wizard shows the selected source and tables, includes uploads by default, and requires the source URL plus explicit confirmation before creating a new archive. The import wizard asks for the package, new destination URL and numeric user-reference fields. Its default action is a read-only preview. To execute, choose `import`, provide the private run directory, review the plan, type the complete normalized destination URL and answer `yes` to the final confirmation. Empty confirmation means cancellation; `!quit`, end of input and supported cancellation signals also stop the wizard.
+
+The wizard uses the same export/import implementation and preflight as the direct commands. Import approval applies to the preserved package copy and the displayed plan. A changed site allocation, table mapping or user action during review stops execution before site creation. Cancelled imports can retain a private journal and package with status `failed`, no site ID and a completed cleanup checkpoint. Use the existing status command to inspect them.
+
+Piped input/output, `--yes` and `--quiet` are rejected. Scripts continue to use `export all`, `import all --dry-run --format=json` and `import all` with explicit arguments. See [Wizard usage](docs/migration-wizard.md) (German) for the guided workflow and cancellation behavior.
+
 ### Preflight and dry-run
 
 Validate a package and display the planned changes before importing:

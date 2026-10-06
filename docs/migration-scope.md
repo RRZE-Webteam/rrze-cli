@@ -168,6 +168,14 @@ Die Ausführung ist in feste Schritte zerlegt. Eine installationsweite Datenbank
 
 Ein harter Abbruch kann Arbeitsdateien und noch laufende Kindprozesse zurücklassen. Deren Ende muss vor manuellen Bereinigungen feststehen. Details und Befehle stehen in [Migrationsläufe und Wiederherstellung](migration-recovery.md). Fremde parallele Schreibzugriffe, globale Nebenwirkungen von Erweiterungen und die Betriebsabnahme bleiben gesondert zu prüfen.
 
+## Umsetzungsstand nach Paket 6
+
+`rrze-migration wizard` führt interaktiv durch Export und Import. Die Auswahl der Quelle erfolgt über den vorhandenen WordPress-Kontext und `--url`; das Importziel wird ausdrücklich eingegeben. Die Importvorschau ist vorausgewählt. Eine Ausführung verlangt die Wiederholung der vollständigen Ziel-URL und eine ausdrückliche Zustimmung zum geprüften Plan. Der Export zeigt seine Quelle, Tabellen, Medienauswahl und Ausgabedatei vor der Bestätigung.
+
+Der Wizard ruft die vorhandenen Export-/Importabläufe auf. Er kann weder eine Zielprüfung umgehen noch Websites löschen oder Schritte fortsetzen. Die Importfreigabe gilt für die aufbewahrte Paketkopie; die erneute Vorprüfung unter Sperre muss dieselben Entscheidungen ergeben. Änderungen an Site-ID, Zielressourcen oder Benutzeraktionen verlangen eine neue Prüfung und Bestätigung. Schwankender verfügbarer Speicher ist zulässig, sofern die Kapazitätsprüfung weiterhin besteht.
+
+Nichtinteraktive Ein-/Ausgabe und automatische Bestätigung werden im Wizard abgelehnt. Die direkten Befehle bleiben für Skripte verfügbar. Ein Abbruch während der Bestätigung verändert keine Website; bereits vorbereitete private Laufdaten bleiben nachvollziehbar erhalten. Bedienung und Grenzen stehen unter [Export und Import mit dem Migrationsassistenten](migration-wizard.md).
+
 ## Noch offene Entscheidungen und Abschluss
 
 | Thema | Vorschlag für den ersten abgesicherten Umfang |

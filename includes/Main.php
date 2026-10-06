@@ -45,6 +45,7 @@ class Main
         WP_CLI::add_command('rrze-migration export', __NAMESPACE__ . '\\Migration\\Export');
         WP_CLI::add_command('rrze-migration import', __NAMESPACE__ . '\\Migration\\Import');
         WP_CLI::add_command('rrze-migration status', __NAMESPACE__ . '\\Migration\\Status');
+        WP_CLI::add_command('rrze-migration wizard', __NAMESPACE__ . '\\Migration\\Wizard');
         // Author/reference updates are internal to the import of a newly created site.
 
         // rrze-multilang (usage stats & migration of workflow plugin network & translation modules to multilang plugin)

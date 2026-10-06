@@ -202,6 +202,20 @@ final class Sandbox
         ], $path, $this->environment);
     }
 
+    public function terminal(string $installation, array $arguments, array $dialogue): array
+    {
+        $this->assertOwned();
+        if (!in_array($installation, ['source', 'target', 'single'], true)) {
+            throw new RuntimeException('Unknown disposable installation.');
+        }
+        $path = $this->root . '/' . $installation;
+        $result = Process::terminal([
+            $this->php, '-d', 'display_errors=stderr', $this->wpCli, '--path=' . $path, '--skip-packages', '--no-color', ...$arguments,
+        ], $path, $this->environment, $dialogue);
+        file_put_contents($this->root . '/commands.log', implode(' ', $arguments) . "\nexit=" . $result['code'] . "\n" . $result['stdout'] . $result['stderr'] . "\n", FILE_APPEND);
+        return $result;
+    }
+
     public function wp(string $installation, array $arguments): string
     {
         $result = $this->command($installation, $arguments);

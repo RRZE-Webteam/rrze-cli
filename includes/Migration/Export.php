@@ -11,6 +11,10 @@ use WP_CLI;
 /** Exports site-owned data for migration to a new multisite site. */
 class Export extends Command
 {
+    public function __construct(private readonly ?\Closure $review = null)
+    {
+    }
+
     /**
      * Exports a website to a new ZIP file; existing files are never replaced.
      *
@@ -47,6 +51,15 @@ class Export extends Command
                 throw new RuntimeException('A complete migration package must contain every core table of the source site.');
             }
             $output = $this->output_path($args[0] ?? 'rrze-migration-' . sanitize_title(get_bloginfo('name')) . '.zip');
+            if (file_exists($output) || is_link($output)) {
+                throw new RuntimeException('The output file already exists. Choose a new filename.');
+            }
+            if ($this->review !== null && !($this->review)([
+                'source' => home_url(), 'site_id' => get_current_blog_id(), 'tables' => $tables,
+                'output' => $output, 'uploads' => isset($assoc_args['uploads']),
+            ])) {
+                throw new RuntimeException('Export cancelled. No output file was created.');
+            }
             fclose(Files::output($output));
             $reserved = true;
             $workspace = Files::workspace();

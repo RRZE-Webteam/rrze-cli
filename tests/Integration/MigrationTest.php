@@ -654,6 +654,252 @@ PHPHOOK);
         }
     }
 
+    public function testWizardRejectsPipesAndAutomaticApprovalWithoutDestinationChanges(): void
+    {
+        $before = self::$sandbox->fixture('target', 'state');
+        $result = self::$sandbox->command('target', ['rrze-migration', 'wizard', 'import']);
+        self::assertNotSame(0, $result['code']);
+        self::assertStringContainsString('interactive input and output terminal', $result['stderr']);
+        foreach (['--yes', '--quiet'] as $flag) {
+            $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import', $flag], []);
+            self::assertNotSame(0, $result['code']);
+            self::assertStringNotContainsString('ZIP package (relative', $result['stdout']);
+        }
+        self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+    }
+
+    public function testWizardPreviewIsDefaultAndRetriesInvalidInputWithoutWriting(): void
+    {
+        self::$sandbox->exportPackage();
+        $before = self::$sandbox->fixture('target', 'state');
+        $files = $this->uploadsSnapshot();
+        $runs = glob(self::$sandbox->root . '/runs-target/*');
+        $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard'], [
+            ['Operation (', ''],
+            ['ZIP package (relative', 'missing.zip'],
+            ['ZIP package (relative', 'fixture.zip'],
+            ['New destination URL', 'not-a-url'],
+            ['New destination URL', 'http://target.test/control/'],
+            ['New destination URL', 'http://target.test/wizard-preview/'],
+            ['Post meta keys', '_fixture_user'],
+            ['Next action', ''],
+        ]);
+        self::assertSame(0, $result['code'], $result['stdout']);
+        self::assertSame(8, $result['answers']);
+        self::assertStringContainsString('destination site already exists', $result['stdout']);
+        self::assertStringContainsString('Dry-run complete', $result['stdout']);
+        self::assertStringContainsString('Numeric user-reference fields: _fixture_user', $result['stdout']);
+        self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        self::assertSame($files, $this->uploadsSnapshot());
+        self::assertSame($runs, glob(self::$sandbox->root . '/runs-target/*'));
+        $this->assertWorkspaceClean();
+    }
+
+    public function testWizardExportsSelectedSourceWithUploadsAndProtectsExistingOutput(): void
+    {
+        $source = 'http://source.test/source/';
+        $url = trim(self::$sandbox->wp('source', ['option', 'get', 'home', '--url=' . $source]));
+        $before = self::$sandbox->fixture('source', 'snapshot', ['2']);
+        $file = self::$sandbox->root . '/wizard export.zip';
+        $dialogue = [
+            ['New ZIP filename', $file], ['Additional site-owned tables', ''], ['Include uploads', ''],
+            ['Type that complete URL', $url], ['Create this export package now', 'yes'],
+        ];
+        $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=' . $source], $dialogue);
+        self::assertSame(0, $result['code'], $result['stdout']);
+        self::assertSame(5, $result['answers']);
+        self::assertFileExists($file);
+        $zip = new ZipArchive();
+        self::assertTrue($zip->open($file));
+        $meta = json_decode($zip->getFromName('site.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(2, $meta['blog_id']);
+        self::assertTrue($meta['uploads_included']);
+        self::assertCount(1, array_filter(array_keys($meta['files']), static fn ($name) => str_ends_with($name, '/fixture.png')));
+        $zip->close();
+        $hash = hash_file('sha256', $file);
+        $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=' . $source], array_slice($dialogue, 0, 3));
+        self::assertNotSame(0, $result['code']);
+        self::assertStringContainsString('output file already exists', $result['stdout']);
+        self::assertSame($hash, hash_file('sha256', $file));
+        self::assertSame($before, self::$sandbox->fixture('source', 'snapshot', ['2']));
+        $this->assertWorkspaceClean();
+    }
+
+    public function testWizardExportCancellationCreatesNoOutput(): void
+    {
+        $before = self::$sandbox->fixture('source', 'state');
+        foreach (['', '!quit', "\x04"] as $answer) {
+            $file = self::$sandbox->root . '/cancel-' . bin2hex(random_bytes(3)) . '.zip';
+            $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=http://source.test/source/'], [
+                ['New ZIP filename', $file], ['Additional site-owned tables', ''], ['Include uploads', ''],
+                ['Type that complete URL', $answer],
+            ]);
+            self::assertNotSame(0, $result['code'], $result['stdout']);
+            self::assertFileDoesNotExist($file);
+        }
+        self::assertSame($before, self::$sandbox->fixture('source', 'state'));
+        $this->assertWorkspaceClean();
+    }
+
+    public function testWizardImportCancellationCleansWorkspaceAndPreservesDestination(): void
+    {
+        self::$sandbox->exportPackage();
+        $before = self::$sandbox->fixture('target', 'state');
+        foreach (['wrong-url', 'default-no', 'quit', 'eof', 'signal', 'interrupt'] as $mode) {
+            $url = 'http://target.test/wizard-cancel-' . $mode . '/';
+            $dialogue = $this->wizardImportDialogue('fixture.zip', $url);
+            $dialogue[] = ['Type that complete URL', $mode === 'wrong-url' ? 'http://wrong.test/' : $url];
+            if ($mode !== 'wrong-url') {
+                $answer = match ($mode) {
+                    'quit' => '!quit', 'eof' => "\x04",
+                    'signal', 'interrupt' => static function ($process) use ($mode) { proc_terminate($process, $mode === 'signal' ? SIGTERM : SIGINT); return null; },
+                    default => '',
+                };
+                $dialogue[] = ['Create the new website and execute this plan now', $answer];
+            }
+            $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
+            self::assertNotSame(0, $result['code'], $result['stdout']);
+            self::assertStringNotContainsString('All done', $result['stdout']);
+            $state = $this->runStatus($this->runId($result));
+            self::assertSame('failed', $state['observed_status']);
+            self::assertNull($state['site_id']);
+            self::assertArrayNotHasKey('create_site', $state['steps']);
+            self::assertSame('completed', $state['steps']['cleanup']['status']);
+            self::assertTrue($state['package_intact']);
+            self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+            $this->assertWorkspaceClean();
+        }
+    }
+
+    public function testWizardImportUsesReviewedPackageDespiteOriginalFileChanging(): void
+    {
+        self::$sandbox->exportPackage();
+        $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
+        $url = 'http://target.test/wizard-imported/';
+        $dialogue = $this->wizardImportDialogue('fixture.zip', $url);
+        $dialogue[] = ['Type that complete URL', $url];
+        $dialogue[] = ['Create the new website and execute this plan now', static function () {
+            file_put_contents(self::$sandbox->root . '/target/fixture.zip', 'changed after review');
+            return 'yes';
+        }];
+        try {
+            $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
+            self::assertSame(0, $result['code'], $result['stdout']);
+            $state = $this->runStatus($this->runId($result));
+            self::assertSame('completed', $state['observed_status']);
+            self::assertTrue($state['package_intact']);
+            $content = self::$sandbox->fixture('target', 'content', [(string) $state['site_id']]);
+            $source = self::$sandbox->fixture('source', 'content', ['2']);
+            self::assertSame($source['title'], $content['title']);
+            self::assertSame($source['media_hash'], $content['media_hash']);
+            self::assertSame(4, $content['shared']);
+            self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
+            $this->assertWorkspaceClean();
+        } finally {
+            self::$sandbox->exportPackage();
+        }
+    }
+
+    public function testWizardRejectsChangedUserPlanAfterConfirmation(): void
+    {
+        self::$sandbox->exportPackage();
+        $package = $this->modifiedPackage(fn ($zip) => $this->rewriteCsv($zip, static function ($row) {
+            if ($row['user_login'] === 'sso0002') {
+                $row['user_login'] = 'wizardlate01';
+                $row['user_email'] = 'wizardlate01@company.example';
+            }
+            return $row;
+        }));
+        $url = 'http://target.test/wizard-changed/';
+        $afterExternal = null;
+        $dialogue = $this->wizardImportDialogue($package, $url);
+        $dialogue[] = ['Type that complete URL', $url];
+        $dialogue[] = ['Create the new website and execute this plan now', static function () use (&$afterExternal) {
+            self::$sandbox->wp('target', ['user', 'create', 'wizardlate01', 'wizardlate01@company.example', '--user_pass=synthetic-test-password', '--role=subscriber']);
+            $afterExternal = self::$sandbox->fixture('target', 'state');
+            return 'yes';
+        }];
+        $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
+        self::assertNotSame(0, $result['code']);
+        self::assertStringContainsString('plan changed during review', $result['stdout']);
+        self::assertNotNull($afterExternal);
+        self::assertSame($afterExternal, self::$sandbox->fixture('target', 'state'));
+        self::assertNull($this->runStatus($this->runId($result))['site_id']);
+        $this->assertWorkspaceClean();
+    }
+
+    public function testWizardRejectsDestinationClaimedWhileReviewing(): void
+    {
+        self::$sandbox->exportPackage();
+        $url = 'http://target.test/wizard-claimed/';
+        $afterExternal = null;
+        $dialogue = $this->wizardImportDialogue('fixture.zip', $url);
+        $dialogue[] = ['Type that complete URL', $url];
+        $dialogue[] = ['Create the new website and execute this plan now', static function () use (&$afterExternal) {
+            self::$sandbox->wp('target', ['site', 'create', '--slug=wizard-claimed', '--title=External fixture site', '--email=admin@company.example']);
+            $afterExternal = self::$sandbox->fixture('target', 'state');
+            return 'yes';
+        }];
+        $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
+        self::assertNotSame(0, $result['code']);
+        self::assertStringContainsString('destination site already exists', $result['stdout']);
+        self::assertNotNull($afterExternal);
+        self::assertSame($afterExternal, self::$sandbox->fixture('target', 'state'));
+        self::assertNull($this->runStatus($this->runId($result))['site_id']);
+        $this->assertWorkspaceClean();
+    }
+
+    public function testWizardBlocksInvalidPackageAndSingleSiteBeforeConfirmation(): void
+    {
+        self::$sandbox->exportPackage();
+        $before = self::$sandbox->fixture('target', 'state');
+        $package = $this->modifiedPackage(static function ($zip) { $zip->addFromString('tables.sql', 'corrupt'); }, false);
+        $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $this->wizardImportDialogue($package, 'http://target.test/wizard-corrupt/'));
+        self::assertNotSame(0, $result['code']);
+        self::assertStringNotContainsString('Type that complete URL', $result['stdout']);
+        self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        $single = self::$sandbox->fixture('single', 'state');
+        $result = self::$sandbox->terminal('single', ['rrze-migration', 'wizard', 'import'], []);
+        self::assertNotSame(0, $result['code']);
+        self::assertStringContainsString('multisite destination', $result['stdout']);
+        self::assertSame($single, self::$sandbox->fixture('single', 'state'));
+        $this->assertWorkspaceClean();
+    }
+
+    public function testWizardRequiresSeparateConsentWhenMediaAreMissing(): void
+    {
+        self::$sandbox->exportPackage();
+        $package = $this->modifiedPackage(static function ($zip) {
+            $meta = json_decode($zip->getFromName('site.json'), true, 512, JSON_THROW_ON_ERROR);
+            $meta['uploads_included'] = false;
+            foreach (array_keys($meta['files']) as $name) {
+                if (str_starts_with($name, 'wp-content/uploads/')) {
+                    $zip->deleteName($name);
+                }
+            }
+            $zip->addFromString('site.json', json_encode($meta, JSON_THROW_ON_ERROR));
+        });
+        $before = self::$sandbox->fixture('target', 'state');
+        $dialogue = $this->wizardImportDialogue($package, 'http://target.test/wizard-no-media/');
+        $dialogue[] = ['Media are absent; a separate transfer is not verified. Continue', ''];
+        $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
+        self::assertNotSame(0, $result['code']);
+        self::assertSame(6, $result['answers']);
+        self::assertStringNotContainsString('Type that complete URL', $result['stdout']);
+        self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        self::assertNull($this->runStatus($this->runId($result))['site_id']);
+        $this->assertWorkspaceClean();
+    }
+
+    private function wizardImportDialogue(string $file, string $url): array
+    {
+        return [
+            ['ZIP package (relative', $file], ['New destination URL', $url],
+            ['Post meta keys', '_fixture_user'], ['Next action', 'import'],
+            ['Private persistent run directory', ''],
+        ];
+    }
+
     private function cleanupInterruptedWorkspace(array $state): void
     {
         // Only fixture processes already known to have exited with no active child command.

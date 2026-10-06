@@ -162,6 +162,32 @@ Die Unit-Tests prüfen atomare Checkpoint-Veröffentlichung, private Speicherort
 
 Ein Native-Exit oder harter Abbruch während eines tatsächlich noch laufenden externen Datenbankprozesses wird hier nicht als sicher bereinigt behauptet. Die [Wiederherstellungsanleitung](migration-recovery.md) verlangt deshalb vor administrativen Löschungen die Kontrolle sämtlicher beteiligter Prozesse. Die Tests ersetzen weder die unabhängige Sicherung einer vorab gelöschten Website noch eine Produktionsabnahme mit aktiven Erweiterungen und SSO.
 
+## Lokal verifizierter Stand von Paket 6
+
+Am 6. Oktober 2026 erfolgreich ausgeführt:
+
+- 125 Unit-Tests mit 190 Assertions unter PHP 8.5.10.
+- 39 Integrationstests mit 649 Assertions unter PHP 8.3.30, WP-CLI 2.12.0, WordPress 7.1.2 und MAMP MySQL 5.7.44; keine Fehler, Fehlschläge oder übersprungenen Tests.
+- Unit-Coverage mit PCOV: 445 von 1679 Zeilen (26,50 %). Der Prozentwert enthält weiterhin keine WP-CLI-Kindprozesse und damit auch nicht die interaktiven Integrationstests.
+- Syntaxprüfung aller 13 geänderten oder neuen PHP-Dateien, `git diff --check` und Prüfung der lokalen Dokumentationslinks ohne Fehler.
+- Bereinigung der eigenen Testdatenbanken und Arbeitsverzeichnisse; das im Befehlsprotokoll aufgezeichnete Sandbox-Verzeichnis existiert nach dem Lauf nicht mehr.
+
+Die Unit-Tests prüfen sichere Vorgaben und Eingabegrenzen: Leere Bestätigungen stimmen nicht zu, falsche Ziel-URLs werden nicht übernommen, Eingabeende und `!quit` brechen ab. Terminal-Steuerzeichen werden in den Planausgaben sichtbar maskiert und in Antworten zurückgewiesen. Ein geänderter Benutzerplan oder eine andere Site-ID kann eine frühere Freigabe nicht übernehmen; schwankender freier Speicher wird weiterhin über die Kapazitätsprüfung bewertet.
+
+Die Integrationstests starten WP-CLI in echten Unix-Pseudoterminals und beantworten Fragen erst, nachdem der jeweilige Prompt erscheint. Sie prüfen:
+
+- Export der ausgewählten Quellwebsite mit standardmäßig enthaltenen Medien, Dateinamen mit Leerzeichen und Schutz vorhandener Ausgabedateien.
+- Vorausgewählte Importvorschau, wiederholte Eingabe bei ungültigen Dateien oder URLs und belegten Zieladressen; unveränderte Zieldatenbank, Uploads und Laufverzeichnisse.
+- Ablehnung von Pipes, `--yes`, `--quiet`, Single-Site-Zielen und beschädigten Paketen.
+- Abbruch bei falscher Bestätigungs-URL, Enter auf der abschließenden Frage, `!quit`, Eingabeende, `SIGINT` und `SIGTERM` während der Bestätigung. Der Import legt keine Site an; die Arbeitsdateien werden bereinigt und die private Paketkopie bleibt im fehlgeschlagenen Lauf erhalten.
+- Erfolgreicher Import trotz anschließender Veränderung der ursprünglichen ZIP-Datei: Die geprüfte private Kopie bestimmt die Ausführung.
+- Zwischen Prüfung und Zustimmung extern angelegte Benutzer oder Websites: Die Freigabe deckt keinen veränderten Plan und keine belegte Zieladresse ab. Die nach der gezielten externen Änderung aufgenommenen Zieldaten bleiben durch den Import unverändert.
+- Zusätzliche Zustimmung bei fehlenden Paketmedien; Enter führt zum Abbruch.
+
+Ein Signaltest zeigte, dass blockierendes `fgets()` die Verarbeitung von PHP-Signalhandlern während einer Terminaleingabe verzögern kann. Der Wizard liest Terminaleingaben deshalb mit begrenzten nichtblockierenden Abfragen und stellt den vorherigen Blockiermodus anschließend wieder her. Die Signale werden direkt an den eigenen Testprozess gesendet; es wird kein fremder Prozess beendet.
+
+Die Pseudoterminal-Tests laufen in denselben isolierten WordPress-Kopien wie die übrigen Integrationstests. Sie benötigen Unix-PTY-Unterstützung. Die Terminalpfade der WP-CLI-Kindprozesse sind wie bisher nicht in der Unit-Coverage enthalten.
+
 ## Nächste Erweiterungen
 
 Vollständige SQL-Isolation, konkurrierende Änderungen außerhalb der Migrationssperre, Erweiterungskompatibilität und reale SSO-Anmeldungen bleiben offen. Paket 5 ergänzt nachvollziehbare Abbruchzustände und die Wiederherstellung durch einen frischen Import nach manueller Löschung; der Umgang mit aktiven Kindprozessen und unabhängigen Netzwerksicherungen bleibt eine administrative Aufgabe. Paket 4 ergänzt Format-/Integritätsprüfung, Ressourcengrenzen und Prüfungen auf Restressourcen. Die vorhandenen SQL-Prüfungen sind keine Isolation für beliebige fremde SQL-Dateien. Die hier verifizierten Tests verwenden kontrollierte Exporte und gezielt veränderte synthetische Pakete. Ein tatsächlicher GitHub-CI-Lauf dieses Standes wurde in dieser Arbeit nicht durchgeführt.

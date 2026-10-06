@@ -11,6 +11,11 @@ use WP_CLI;
 /** Imports a controlled export into a newly created multisite site. */
 class Import extends Command
 {
+    /** The wizard supplies a reviewer; direct CLI calls retain their noninteractive behavior. */
+    public function __construct(private readonly ?\Closure $review = null)
+    {
+    }
+
     /**
      * Imports a package into a new site. Existing sites must be deleted manually first.
      *
@@ -75,11 +80,18 @@ class Import extends Command
             $address = $plan['target'];
             if (!$dryRun) {
                 $run->plan($plan, hash('sha256', DB_NAME . '|' . $wpdb->base_prefix));
+                $reviewed = $plan['report'];
+                if ($this->review !== null && !($this->review)($reviewed)) {
+                    throw new RuntimeException('Import cancelled before site creation. No destination changes were made.');
+                }
                 $run->done();
                 $run->begin('acquire_lock');
                 $execution = new Execution($run);
                 $run->done();
                 $plan = $execution->step('recheck', static fn () => Preflight::build($package, $workspace, $assoc_args));
+                if ($this->review !== null) {
+                    Plan::assertUnchanged($reviewed, $plan['report']);
+                }
                 $run->plan($plan, hash('sha256', DB_NAME . '|' . $wpdb->base_prefix));
                 $baseline = Verification::users($plan['users']);
                 $run->baseline($baseline);
@@ -189,19 +201,8 @@ class Import extends Command
 
     private static function show_plan(array $plan): void
     {
-        WP_CLI::log('Source: ' . $plan['source']);
-        WP_CLI::log('Destination: ' . $plan['destination'] . ' (new site only; no overwrite)');
-        WP_CLI::log('Estimated site ID: ' . $plan['destination_details']['estimated_site_id']);
-        foreach ($plan['tables'] as $from => $to) {
-            WP_CLI::log('Table: ' . $from . ' -> ' . $to);
-        }
-        foreach ($plan['users'] as $user) {
-            WP_CLI::log('User: ' . $user['login'] . ' -> ' . $user['action'] . ' (' . $user['role'] . ')');
-        }
-        WP_CLI::log('Media: ' . $plan['uploads']['files'] . ' files, ' . $plan['uploads']['bytes'] . ' bytes');
-        WP_CLI::log('Upload destination: ' . $plan['destination_details']['uploads_directory']);
-        foreach ($plan['limitations'] as $limitation) {
-            WP_CLI::log('Note: ' . $limitation);
+        foreach (Plan::lines($plan) as $line) {
+            WP_CLI::log(Terminal::safe($line));
         }
     }
 

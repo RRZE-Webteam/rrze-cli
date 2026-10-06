@@ -4,7 +4,7 @@ namespace RRZE\CLI\Migration;
 
 use RuntimeException;
 
-/** Shared planning logic for CLI execution, dry-run and a future wizard. */
+/** Shared planning logic for CLI execution, dry-run and the interactive wizard. */
 final class Preflight
 {
     public static function build(array $package, string $workspace, array $options): array

@@ -48,6 +48,19 @@ final class Execution
             $guard();
         }
         $this->run->begin($name);
+        \WP_CLI::log(match ($name) {
+            'recheck' => 'Rechecking the destination under the migration lock...',
+            'create_site' => 'Creating the new destination website...',
+            'import_tables' => 'Importing site tables...',
+            'replace_urls' => 'Replacing source URLs...',
+            'configure_site' => 'Configuring the new website...',
+            'import_users' => 'Mapping SSO users and adding site memberships...',
+            'remap_references' => 'Mapping author and user references...',
+            'import_uploads' => 'Transferring packaged media...',
+            'finalize' => 'Updating the new website rewrite rules...',
+            'verify' => 'Verifying the imported website and protected user accounts...',
+            default => 'Migration step: ' . $name,
+        });
         do_action('rrze_migration_before_step', $name, $this->run->id);
         $this->assertOwned();
         if ($guard) {

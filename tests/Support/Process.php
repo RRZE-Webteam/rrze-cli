@@ -67,4 +67,66 @@ final class Process
         }
         return $result['stdout'];
     }
+
+    /** Drive real Unix pseudo-terminals; each answer follows an observed prompt. */
+    public static function terminal(array $command, string $directory, array $environment, array $dialogue): array
+    {
+        $process = proc_open($command, [0 => ['pty'], 1 => ['pty'], 2 => ['pty']], $pipes, $directory, $environment);
+        if (!is_resource($process)) {
+            throw new RuntimeException('Could not start interactive test subprocess.');
+        }
+        foreach ($pipes as $pipe) {
+            stream_set_blocking($pipe, false);
+        }
+        // proc_open connects these descriptors to one PTY; stdout/stderr are merged.
+        $output = '';
+        $next = 0;
+        $offset = 0;
+        $deadline = microtime(true) + 120;
+        try {
+            do {
+                foreach ($pipes as $index => $pipe) {
+                    // A closed PTY reports EIO on some supported Unix platforms.
+                    $chunk = @stream_get_contents($pipe);
+                    if ($chunk !== false) {
+                        $output .= $chunk;
+                    }
+                }
+                if (isset($dialogue[$next])) {
+                    [$prompt, $answer] = $dialogue[$next];
+                    $position = strpos($output, $prompt, $offset);
+                    if ($position !== false) {
+                        $offset = $position + strlen($prompt);
+                        if (is_callable($answer)) {
+                            $answer = $answer($process);
+                        }
+                        if ($answer !== null) {
+                            fwrite($pipes[0], $answer . "\n");
+                        }
+                        $next++;
+                    }
+                }
+                $status = proc_get_status($process);
+                if (!$status['running']) {
+                    break;
+                }
+                if (microtime(true) >= $deadline) {
+                    throw new RuntimeException('Interactive test timed out at answer ' . $next . ': ' . $output);
+                }
+                usleep(20000);
+            } while (true);
+            foreach ($pipes as $index => $pipe) {
+                $output .= @stream_get_contents($pipe) ?: '';
+            }
+            return ['code' => $status['exitcode'], 'stdout' => $output, 'stderr' => '', 'answers' => $next];
+        } finally {
+            if (proc_get_status($process)['running']) {
+                proc_terminate($process, 9);
+            }
+            foreach ($pipes as $pipe) {
+                fclose($pipe);
+            }
+            proc_close($process);
+        }
+    }
 }
