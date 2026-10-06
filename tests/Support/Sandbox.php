@@ -137,6 +137,7 @@ final class Sandbox
                 'WP_ENVIRONMENT_TYPE' => 'local', 'DISABLE_WP_CRON' => true,
                 'WP_HTTP_BLOCK_EXTERNAL' => true, 'WP_AUTO_UPDATE_CORE' => false,
                 'RRZE_CLI_TEST_RUN' => $this->token,
+                'RRZE_MIGRATION_RUN_DIR' => $this->root . '/runs-' . $name,
             ];
             foreach ($defines as $constant => $value) {
                 $config .= 'define(' . var_export($constant, true) . ', ' . var_export($value, true) . ");\n";
@@ -187,6 +188,18 @@ final class Sandbox
         ], $path, $this->environment);
         file_put_contents($this->root . '/commands.log', implode(' ', $arguments) . "\nexit=" . $result['code'] . "\n" . $result['stdout'] . $result['stderr'] . "\n", FILE_APPEND);
         return $result;
+    }
+
+    public function background(string $installation, array $arguments): array
+    {
+        $this->assertOwned();
+        if (!in_array($installation, ['source', 'target', 'single'], true)) {
+            throw new RuntimeException('Unknown disposable installation.');
+        }
+        $path = $this->root . '/' . $installation;
+        return Process::start([
+            $this->php, '-d', 'display_errors=stderr', $this->wpCli, '--path=' . $path, '--skip-packages', '--no-color', ...$arguments,
+        ], $path, $this->environment);
     }
 
     public function wp(string $installation, array $arguments): string

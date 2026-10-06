@@ -152,6 +152,21 @@ $result = match ($action) {
         }
         return $result;
     })(),
+    'delete-migration-site' => (function () use ($args) {
+        $id = (int) $args[1];
+        if ($id <= 2 || !get_site_meta($id, 'rrze_migration_run', true)) {
+            throw new RuntimeException('Refusing to delete a non-migration fixture site.');
+        }
+        $deleted = wp_delete_site($id);
+        if (is_wp_error($deleted)) {
+            throw new RuntimeException('Fixture site deletion failed.');
+        }
+        return ['deleted' => !get_site($id)];
+    })(),
+    'lookup-user' => (function () use ($args) {
+        $user = get_user_by('login', $args[1]);
+        return $user ? ['id' => $user->ID, 'row_hash' => hash('sha256', wp_json_encode($user->data))] : [];
+    })(),
     'leftover' => (function () use ($args) {
         global $wpdb;
         $id = (int) $wpdb->get_var($wpdb->prepare('SELECT AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s', DB_NAME, $wpdb->blogs));

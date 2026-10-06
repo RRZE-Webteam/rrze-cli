@@ -60,12 +60,20 @@ Destination preflight requires explicit database/schema grants sufficient for th
 Run from the destination WordPress directory. Use the global `--url` to select the destination network context when needed.
 
 ```sh
-wp rrze-migration import all website.zip --new_url=https://target.example.test/new-site/ --uid_fields=_fixture_user
+wp rrze-migration import all website.zip --new_url=https://target.example.test/new-site/ --uid_fields=_fixture_user --run-dir=/srv/private/rrze-migrations
 ```
 
 User matching uses the exact SSO `user_login`; the company email must agree. Conflicting logins/emails, duplicate CSV identities and unknown destination roles stop the import before a new site is created. New WordPress users receive a fresh random local password; this does not provision an SSO account. Existing global user profiles, passwords and memberships on other sites are preserved. Only the new site's membership is added.
 
 User CSV exports exclude passwords, reset keys, application passwords, sessions and global permission fields, including attempts to add these through export filters. Legacy credential fields inside a supported versioned package are discarded on import. New users receive the supported standard profile fields; arbitrary custom user metadata and former import hooks are not replayed.
+
+Actual imports require a private persistent `--run-dir` outside web roots, or `RRZE_MIGRATION_RUN_DIR` in the destination configuration. Each run retains its validated input package and an atomic checkpoint journal without credentials. Dry-runs require no journal directory. See [Run status and recovery](docs/migration-recovery.md) (German) for setup, interruption handling and retention.
+
+```sh
+wp rrze-migration status RUN_ID --run-dir=/srv/private/rrze-migrations --format=json
+```
+
+Imports sharing the database and base prefix run one at a time, including imports to different destination URLs. Each created site is tagged with its run ID and ownership is checked between steps. Before success, the importer verifies destination tables, URLs, user mappings, existing participant profiles and packaged media. A running step without a completion checkpoint may have partially or fully executed; individual steps are never replayed automatically.
 
 Database export/import and URL replacement run in child processes. A failed command stops the migration with a nonzero status. A partially created site is retained for inspection and must be deleted manually before a retry. The import never removes sites or global users automatically.
 
@@ -76,4 +84,4 @@ Database export/import and URL replacement run in child processes. A failed comm
 - `--plugins` and `--themes`, including legacy packages containing their code, are rejected. Provide dependencies separately in the destination.
 - `--mysql-single-transaction` is rejected: wrapping a dump containing DDL does not make the migration atomic.
 
-Use packages from controlled exports only. Current SQL table checks are not a sandbox for arbitrary SQL. Full SQL isolation, interrupted-run recovery, extension compatibility, complete concurrency coverage and real SSO acceptance remain part of the following work packages. A successful dry-run does not execute SQL and cannot guarantee a successful import. An import without packaged media does not verify a separate media transfer.
+Use packages from controlled exports only. Current SQL table checks are not a sandbox for arbitrary SQL. Full SQL isolation, extension compatibility, concurrency with external writers and real SSO acceptance remain part of the following work packages. Recovery uses the retained package for a fresh import after manual site deletion; it does not restore an independently deleted old site or roll back global tables. A successful dry-run does not execute SQL and cannot guarantee a successful import. An import without packaged media does not verify a separate media transfer.

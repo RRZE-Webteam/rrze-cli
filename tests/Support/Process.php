@@ -11,6 +11,12 @@ final class Process
     /** @return array{code: int, stdout: string, stderr: string} */
     public static function run(array $command, string $directory, ?array $environment = null, int $timeout = 120): array
     {
+        return self::finish(self::start($command, $directory, $environment), $timeout);
+    }
+
+    /** Start an owned fixture process for concurrency and interruption tests. */
+    public static function start(array $command, string $directory, ?array $environment = null): array
+    {
         $stdout = tmpfile();
         $stderr = tmpfile();
         $process = proc_open($command, [0 => ['pipe', 'r'], 1 => $stdout, 2 => $stderr], $pipes, $directory, $environment);
@@ -18,6 +24,12 @@ final class Process
             throw new RuntimeException('Could not start test subprocess.');
         }
         fclose($pipes[0]);
+        return compact('process', 'stdout', 'stderr', 'command');
+    }
+
+    public static function finish(array $running, int $timeout = 120): array
+    {
+        ['process' => $process, 'stdout' => $stdout, 'stderr' => $stderr, 'command' => $command] = $running;
         $deadline = microtime(true) + $timeout;
         try {
             do {

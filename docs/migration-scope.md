@@ -156,7 +156,17 @@ Neue Exporte enthalten Formatversion 1, feste Pflichtdateien und ein Manifest mi
 
 Die Vorprüfung kontrolliert belegte Adressen, Benutzerzuordnung, explizite Datenbankrechte, Schreibrechte, verfügbaren lokalen Speicher und Restressourcen der voraussichtlich nächsten Site-ID. Alte Tabellen, Upload-Verzeichnisse und Mitgliedschaften blockieren den Import. Vor der Ausführung wird der Plan unter der Migrationssperre erneut aufgebaut. Ein früher Hook prüft die tatsächlich zugeteilte ID und Restressourcen vor der regulären WordPress-Initialisierung. Ein dann erkannter Konflikt kann bereits einen uninitialisierten Site-Eintrag hinterlassen; dessen Entfernung bleibt manuell.
 
-Der Dry-run ist keine SQL-Probeausführung und reserviert weder Site-ID noch Speicher. Datenbankserver-Speicherplatz, fremde Hooks und konkurrierende Prozesse, zusätzliche Upload-Layouts, Rollengrants, Erweiterungen und reale SSO-Anmeldungen benötigen weitere Abnahme. Fehlerbehandlung nach bereits begonnenen Schreibschritten bleibt Gegenstand von Paket 5.
+Der Dry-run ist keine SQL-Probeausführung und reserviert weder Site-ID noch Speicher. Datenbankserver-Speicherplatz, fremde Hooks und konkurrierende Prozesse, zusätzliche Upload-Layouts, Rollengrants, Erweiterungen und reale SSO-Anmeldungen benötigen weitere Abnahme. Die Fehlerbehandlung nach bereits begonnenen Schreibschritten ist im folgenden Stand von Paket 5 ergänzt.
+
+## Umsetzungsstand nach Paket 5
+
+Ein echter Import benötigt ein dauerhaftes privates Laufverzeichnis. Dort werden vor der Paketprüfung eine unveränderte Kopie der Eingabe und anschließend atomar veröffentlichte Checkpoints gespeichert. Die Laufkennung, die tatsächlich angelegte Site-ID, Zielressourcen, Benutzer-ID-Zuordnungen und Ergebniszustände bleiben auch nach einem Abbruch prüfbar. Im Site-Metadatensatz kennzeichnet ausschließlich `rrze_migration_run` die Zugehörigkeit der neuen Website; fremde Websites erhalten keinen solchen Eintrag.
+
+Die Ausführung ist in feste Schritte zerlegt. Eine installationsweite Datenbanksperre verhindert gleichzeitige rrze-cli-Importe auch auf unterschiedliche Ziele. Site-Zugehörigkeit und Sperre werden wiederholt geprüft. Vor der Erfolgsmeldung werden vorhandene beteiligte Benutzer, URLs, Tabellen, Rollen, Referenzen und enthaltene Mediendateien kontrolliert. Checkpoints enthalten keine Zugangsdaten oder rohen Fehlermeldungen.
+
+`rrze-migration status` liest den Zustand und gibt Wiederherstellungshinweise aus. Ein offener Schritt nach einem Prozessabbruch bleibt ausdrücklich ungewiss; er wird nicht automatisch wiederholt. Die Wiederherstellung besteht aus manueller Prüfung und Löschung der unvollständigen neuen Website, erneuter Vorprüfung des aufbewahrten Pakets und einem frischen Import. Globale Konten bleiben erhalten und werden erneut anhand der SSO-Kennung geprüft. Das Verfahren überschreibt keine Netzwerk- oder Benutzersicherung über eine laufende Installation und ersetzt keine Sicherung vor der ursprünglichen manuellen Löschung.
+
+Ein harter Abbruch kann Arbeitsdateien und noch laufende Kindprozesse zurücklassen. Deren Ende muss vor manuellen Bereinigungen feststehen. Details und Befehle stehen in [Migrationsläufe und Wiederherstellung](migration-recovery.md). Fremde parallele Schreibzugriffe, globale Nebenwirkungen von Erweiterungen und die Betriebsabnahme bleiben gesondert zu prüfen.
 
 ## Noch offene Entscheidungen und Abschluss
 

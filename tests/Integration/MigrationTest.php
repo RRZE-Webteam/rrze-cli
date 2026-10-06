@@ -428,6 +428,291 @@ PHPHOOK);
         }
     }
 
+    public function testSuccessfulRunHasVerifiedJournalAndRetainedPackage(): void
+    {
+        $runs = glob(self::$sandbox->root . '/runs-target/*/run.json');
+        $completed = [];
+        foreach ($runs as $file) {
+            $state = json_decode(file_get_contents($file), true, 64, JSON_THROW_ON_ERROR);
+            if ($state['status'] === 'completed') {
+                $completed[] = $state;
+            }
+        }
+        self::assertNotEmpty($completed);
+        $state = $this->runStatus($completed[0]['run_id']);
+        self::assertSame('completed', $state['observed_status']);
+        self::assertSame('completed', $state['steps']['verify']['status']);
+        self::assertSame('completed', $state['steps']['cleanup']['status']);
+        self::assertTrue($state['package_intact']);
+        self::assertFalse($state['active']);
+        self::assertSame(0600, fileperms($state['preserved_package']) & 0777);
+    }
+
+    public function testEveryWritingPhaseRecordsFailureAndDoesNotReportSuccess(): void
+    {
+        $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/fail-phase.php';
+        $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
+        foreach (['import_tables', 'replace_urls', 'configure_site', 'import_users', 'remap_references', 'import_uploads', 'finalize', 'verify'] as $phase) {
+            file_put_contents($hook, '<?php add_action("rrze_migration_after_step", static function ($step) { if ($step === ' . var_export($phase, true) . ') { throw new RuntimeException("synthetic-secret-not-for-journal"); } });');
+            try {
+                $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/fault-' . $phase . '/', '--uid_fields=_fixture_user']);
+                self::assertNotSame(0, $result['code']);
+                self::assertStringNotContainsString('All done', $result['stdout']);
+                $state = $this->runStatus($this->runId($result));
+                self::assertSame('failed', $state['status']);
+                self::assertSame($phase, $state['failure_step']);
+                self::assertSame('started', $state['steps'][$phase]['status']);
+                self::assertSame('completed', $state['steps']['cleanup']['status']);
+                self::assertNotNull($state['site_id']);
+                self::assertTrue($state['package_intact']);
+                $journal = file_get_contents(self::$sandbox->root . '/runs-target/' . $state['run_id'] . '/run.json');
+                foreach (['synthetic-secret-not-for-journal', 'user_pass', 'user_email', 'session_tokens', '_application_passwords', 'synthetic-session-secret', 'synthetic-application-secret'] as $secret) {
+                    self::assertStringNotContainsString($secret, $journal);
+                }
+                $this->assertWorkspaceClean();
+            } finally {
+                unlink($hook);
+            }
+        }
+        self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
+    }
+
+    public function testRecoveryAfterManualDeletionReusesCreatedGlobalUserAndPreservedPackage(): void
+    {
+        $name = $this->modifiedPackage(function (ZipArchive $zip) {
+            $this->rewriteCsv($zip, static function ($row) {
+                if ($row['user_login'] === 'sso0002') {
+                    $row['user_login'] = 'recovery01';
+                    $row['user_email'] = 'recovery01@company.example';
+                }
+                return $row;
+            });
+        });
+        $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/recovery-failure.php';
+        file_put_contents($hook, '<?php add_action("rrze_migration_after_step", static function ($step) { if ($step === "import_users") { throw new RuntimeException("Recovery fixture interruption"); } });');
+        $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
+        try {
+            $failed = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $name, '--new_url=http://target.test/recovered/', '--uid_fields=_fixture_user']);
+            self::assertNotSame(0, $failed['code']);
+        } finally {
+            unlink($hook);
+        }
+        $state = $this->runStatus($this->runId($failed));
+        self::assertTrue($state['users'][3]['created']);
+        $user = self::$sandbox->fixture('target', 'lookup-user', ['recovery01']);
+        self::assertSame($state['users'][3]['target_id'], $user['id']);
+        $this->assertRejected($state['preserved_package'], 'http://target.test/recovered/', 'already exists');
+        self::assertSame(['deleted' => true], self::$sandbox->fixture('target', 'delete-migration-site', [(string) $state['site_id']]));
+        self::assertSame($user, self::$sandbox->fixture('target', 'lookup-user', ['recovery01']));
+        unlink(self::$sandbox->root . '/target/' . $name);
+        $plan = json_decode(self::$sandbox->wp('target', ['rrze-migration', 'import', 'all', $state['preserved_package'], '--new_url=http://target.test/recovered/', '--uid_fields=_fixture_user', '--dry-run', '--format=json']), true, 512, JSON_THROW_ON_ERROR);
+        $plannedUser = array_values(array_filter($plan['users'], static fn ($row) => $row['login'] === 'recovery01'))[0];
+        self::assertSame('add_site_membership', $plannedUser['action']);
+        $restored = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $state['preserved_package'], '--new_url=http://target.test/recovered/', '--uid_fields=_fixture_user']);
+        self::assertSame(0, $restored['code'], $restored['stderr']);
+        $restoredState = $this->runStatus($this->runId($restored));
+        self::assertNotSame($state['site_id'], $restoredState['site_id']);
+        self::assertFalse($restoredState['users'][3]['created']);
+        self::assertSame($user, self::$sandbox->fixture('target', 'lookup-user', ['recovery01']));
+        $content = self::$sandbox->fixture('target', 'content', [(string) $restoredState['site_id']]);
+        self::assertSame($user['id'], $content['author']);
+        self::assertSame('Migration fixture', $content['title']);
+        self::assertNotNull($content['media_hash']);
+        self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
+        self::assertTrue($this->runStatus($state['run_id'])['package_intact']);
+    }
+
+    public function testInstallationLockBlocksConcurrentImportsToDifferentUrls(): void
+    {
+        [$hook, $ready, $release] = $this->pauseHook('create_site');
+        $running = self::$sandbox->background('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/concurrent-first/']);
+        try {
+            $this->awaitMarker($ready);
+            $id = trim(file_get_contents($ready));
+            self::assertTrue($this->runStatus($id)['active']);
+            $before = self::$sandbox->fixture('target', 'state');
+            $blocked = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/concurrent-second/']);
+            self::assertNotSame(0, $blocked['code']);
+            self::assertStringContainsString('Another migration is running', $blocked['stderr']);
+            self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        } finally {
+            file_put_contents($release, 'continue');
+            $result = \RRZE\CLI\Tests\Process::finish($running);
+            unlink($hook);
+            @unlink($ready);
+            @unlink($release);
+        }
+        self::assertSame(0, $result['code'], $result['stderr']);
+        $this->assertWorkspaceClean();
+    }
+
+    public function testHardKilledProcessLeavesAnHonestIncompleteCheckpoint(): void
+    {
+        [$hook, $ready, $release] = $this->pauseHook('import_users');
+        $running = self::$sandbox->background('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/hard-kill/']);
+        try {
+            $this->awaitMarker($ready);
+            $id = trim(file_get_contents($ready));
+            self::assertTrue($this->runStatus($id)['active']);
+            proc_terminate($running['process'], 9);
+        } finally {
+            \RRZE\CLI\Tests\Process::finish($running);
+            unlink($hook);
+            @unlink($ready);
+        }
+        $before = self::$sandbox->fixture('target', 'state');
+        $state = $this->runStatus($id);
+        self::assertSame('interrupted_or_unfinished', $state['observed_status']);
+        self::assertSame('started', $state['steps']['import_users']['status']);
+        self::assertSame('completed', $state['steps']['configure_site']['status']);
+        self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        $this->assertRejectedAfterKill($state);
+        $this->cleanupInterruptedWorkspace($state);
+    }
+
+    public function testCancellationStopsAtStepBoundaryAndRecordsInterruption(): void
+    {
+        $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/cancel-run.php';
+        file_put_contents($hook, '<?php add_action("rrze_migration_after_step", static function ($step) { if ($step === "import_users") { posix_kill(getmypid(), SIGTERM); } });');
+        try {
+            $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/cancelled/']);
+            self::assertNotSame(0, $result['code']);
+            $state = $this->runStatus($this->runId($result));
+            self::assertSame('interrupted', $state['status']);
+            self::assertSame('import_users', $state['failure_step']);
+            self::assertArrayNotHasKey('remap_references', $state['steps']);
+            self::assertSame('completed', $state['steps']['cleanup']['status']);
+            $this->assertWorkspaceClean();
+        } finally {
+            unlink($hook);
+        }
+    }
+
+    public function testFinalVerificationRejectsChangedProfilesAndDamagedMedia(): void
+    {
+        $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/fail-verification.php';
+        $profile = trim(self::$sandbox->wp('target', ['user', 'meta', 'get', '4', 'first_name']));
+        $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
+        foreach (['profile', 'media'] as $kind) {
+            $mutation = $kind === 'profile'
+                ? 'update_user_meta(4, "first_name", "unexpected fixture profile change");'
+                : '$state = json_decode(file_get_contents(RRZE_MIGRATION_RUN_DIR . "/" . $id . "/run.json"), true); $files = glob($state["uploads_directory"] . "/*/*/fixture.png"); file_put_contents($files[0], "damaged fixture media");';
+            file_put_contents($hook, '<?php add_action("rrze_migration_before_step", static function ($step, $id) { if ($step === "verify") { ' . $mutation . ' } }, 10, 2);');
+            try {
+                $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/verify-' . $kind . '/']);
+                self::assertNotSame(0, $result['code']);
+                self::assertStringContainsString($kind === 'profile' ? 'existing global user changed' : 'media verification failed', $result['stderr']);
+                $state = $this->runStatus($this->runId($result));
+                self::assertSame('failed', $state['status']);
+                self::assertSame('verify', $state['failure_step']);
+                self::assertSame('started', $state['steps']['verify']['status']);
+                self::assertStringNotContainsString('All done', $result['stdout']);
+            } finally {
+                unlink($hook);
+                if ($kind === 'profile') {
+                    self::$sandbox->wp('target', ['user', 'meta', 'update', '4', 'first_name', $profile]);
+                }
+            }
+        }
+        self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
+        $this->assertWorkspaceClean();
+    }
+
+    public function testLostDatabaseLockStopsBeforeTheNextWrite(): void
+    {
+        $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/lose-lock.php';
+        file_put_contents($hook, '<?php add_action("rrze_migration_before_step", static function ($step) { if ($step === "import_tables") { global $wpdb; $wpdb->get_var("SELECT RELEASE_ALL_LOCKS()"); } });');
+        try {
+            $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/lost-lock/']);
+            self::assertNotSame(0, $result['code']);
+            self::assertStringContainsString('database lock was lost', $result['stderr']);
+            $state = $this->runStatus($this->runId($result));
+            self::assertSame('failed', $state['status']);
+            self::assertSame('import_tables', $state['failure_step']);
+            self::assertArrayNotHasKey('replace_urls', $state['steps']);
+            $this->assertWorkspaceClean();
+        } finally {
+            unlink($hook);
+        }
+    }
+
+    public function testNativeExitPersistsInterruptionWithoutClaimingCleanup(): void
+    {
+        $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/native-exit.php';
+        file_put_contents($hook, '<?php add_action("rrze_migration_before_step", static function ($step) { if ($step === "remap_references") { exit(19); } });');
+        try {
+            $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/native-exit/']);
+            self::assertSame(19, $result['code']);
+            $state = $this->runStatus($this->runId($result));
+            self::assertSame('interrupted', $state['observed_status']);
+            self::assertSame('started', $state['steps']['remap_references']['status']);
+            self::assertArrayNotHasKey('cleanup', $state['steps']);
+            self::assertTrue($state['package_intact']);
+            $this->cleanupInterruptedWorkspace($state);
+        } finally {
+            unlink($hook);
+        }
+    }
+
+    private function cleanupInterruptedWorkspace(array $state): void
+    {
+        // Only fixture processes already known to have exited with no active child command.
+        self::assertSame(self::$sandbox->root, dirname($state['workspace']));
+        self::assertMatchesRegularExpression('/^rrze-migration-[a-f0-9]{32}$/D', basename($state['workspace']));
+        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($state['workspace'], FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
+        foreach ($iterator as $entry) {
+            $entry->isDir() ? rmdir($entry->getPathname()) : unlink($entry->getPathname());
+        }
+        rmdir($state['workspace']);
+        $this->assertWorkspaceClean();
+    }
+
+    private function assertRejectedAfterKill(array $state): void
+    {
+        $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $state['preserved_package'], '--new_url=http://target.test/hard-kill/']);
+        self::assertNotSame(0, $result['code']);
+        self::assertStringContainsString('already exists', $result['stderr']);
+    }
+
+    private function runId(array $result): string
+    {
+        self::assertMatchesRegularExpression('/Migration run: [a-f0-9]{32}/', $result['stdout']);
+        preg_match('/Migration run: ([a-f0-9]{32})/', $result['stdout'], $match);
+        return $match[1];
+    }
+
+    private function runStatus(string $id): array
+    {
+        return json_decode(self::$sandbox->wp('target', ['rrze-migration', 'status', $id, '--format=json']), true, 64, JSON_THROW_ON_ERROR);
+    }
+
+    private function pauseHook(string $step): array
+    {
+        $root = self::$sandbox->root;
+        $hook = $root . '/target/wp-content/mu-plugins/pause-run.php';
+        $ready = $root . '/ready-' . $step;
+        $release = $root . '/release-' . $step;
+        $code = '<?php add_action("rrze_migration_before_step", static function ($step, $id) {'
+            . 'if ($step !== ' . var_export($step, true) . ') { return; }'
+            . 'file_put_contents(' . var_export($ready, true) . ', $id); $deadline = microtime(true) + 45;'
+            . 'while (!file_exists(' . var_export($release, true) . ')) { if (microtime(true) > $deadline) { throw new RuntimeException("Fixture pause timed out"); } usleep(20000); clearstatcache(); }'
+            . '}, 10, 2);';
+        file_put_contents($hook, $code);
+        return [$hook, $ready, $release];
+    }
+
+    private function awaitMarker(string $file): void
+    {
+        $deadline = microtime(true) + 45;
+        while (!is_file($file)) {
+            if (microtime(true) > $deadline) {
+                self::fail('Fixture process did not reach its checkpoint.');
+            }
+            usleep(20000);
+            clearstatcache();
+        }
+    }
+
     private function uploadsSnapshot(): array
     {
         $root = self::$sandbox->root . '/target/wp-content/uploads';

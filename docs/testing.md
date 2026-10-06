@@ -137,6 +137,31 @@ Resttabellen, Upload-Verzeichnisse und alte Mitgliedschaftsschlüssel der nächs
 
 Die Berechtigungsprüfung berücksichtigt explizite Schema-Grants einschließlich maskierter Unterstriche und MySQLs `partial_revokes`-Semantik; reine Rollen- oder Tabellen-Grants werden konservativ abgelehnt. Die hier simulierten eingeschränkten Rechte ergänzen den echten eingeschränkten MAMP-Testbenutzer. Produktionsrechte und Datenbankserver-Speicherplatz werden dadurch nicht als geprüft ausgegeben.
 
+## Lokal verifizierter Stand von Paket 5
+
+Am 6. Oktober 2026 erfolgreich ausgeführt:
+
+- 115 Unit-Tests mit 172 Assertions unter PHP 8.5.10.
+- 29 Integrationstests mit 507 Assertions unter PHP 8.3.30, WP-CLI 2.12.0, WordPress 7.1.2 und MAMP MySQL 5.7.44; keine Fehler, Fehlschläge oder übersprungenen Tests.
+- Unit-Coverage mit PCOV: 409 von 1514 Zeilen (27,01 %), für die neue Laufprotokollierung 105 von 137 Zeilen (76,64 %). Die WP-CLI-Kindprozesse der Integrationstests sind weiterhin nicht im Coverage-Wert enthalten.
+- Syntaxprüfung aller elf geänderten oder neuen PHP-Dateien sowie `git diff --check` ohne Fehler.
+- Bereinigung der eigenen Testdatenbanken und Arbeitsverzeichnisse; auch das im Befehlsprotokoll aufgezeichnete Sandbox-Verzeichnis existiert nach dem Lauf nicht mehr.
+
+Die Sandbox konfiguriert für jede isolierte Installation ein eigenes privates `RRZE_MIGRATION_RUN_DIR` außerhalb ihrer Webverzeichnisse. Dauerhafte Checkpoints und Paketkopien werden innerhalb der Testumgebung aufbewahrt und erst mit deren abschließender Bereinigung entfernt. Die bestehende lokale WordPress-Installation erhält weder diese Konfiguration noch Laufdaten.
+
+Zusätzlich zum bisherigen Export-/Importvergleich prüfen die Integrationstests:
+
+- Erfolgsprotokoll erst nach Ergebnisprüfung und Bereinigung, private Dateirechte und unveränderte Paketkopie.
+- Gezielt ausgelöste Fehler nach Tabellenimport, URL-Ersetzung, Site-Konfiguration, Benutzerübernahme, Referenzkorrektur, Medienübertragung, Rewrite-Regeln und Ergebnisprüfung. Der jeweilige Schritt bleibt als begonnen erkennbar, spätere Schritte werden nicht als abgeschlossen ausgegeben und fremde Inhalte bleiben geschützt.
+- Wiederherstellung aus der aufbewahrten Paketkopie nach kontrollierter manueller Löschung ausschließlich einer Testwebsite. Das zuvor neu angelegte globale Konto behält ID und Kontodatensatz; die neue Website erhält eine neue Site-ID und korrekt zugeordnete Inhalte und Medien.
+- Zwei gleichzeitig gestartete Testimporte auf unterschiedliche Zieladressen: Der zweite scheitert an der Installationssperre vor Site-Anlage; der erste kann anschließend erfolgreich enden.
+- `SIGTERM` an einer Schrittgrenze, nativer PHP-Exit sowie `SIGKILL` bei angehaltenem Testprozess ohne aktive Kindbefehle. Statusabfragen erkennen Unterbrechungen und verändern weder Checkpoints noch Zieltabellen. Verbliebene Arbeitsdateien werden im Test erst nach bestätigtem Prozessende anhand ihres aufgezeichneten Pfads und innerhalb der Testumgebung entfernt.
+- Verlust der Datenbanksperre sowie absichtlich beschädigte Medien und veränderte globale Benutzerprofile: Die nächste Prüfung muss abbrechen und darf keinen Erfolg melden. Die Profiländerung dieser synthetischen Testinjektion wird anschließend gezielt zurückgesetzt.
+
+Die Unit-Tests prüfen atomare Checkpoint-Veröffentlichung, private Speicherorte, Pfadabgrenzung, Paketkopien, Zustandsübergänge und das Verbot einer Erfolgsmeldung ohne abgeschlossene Prüfung und Bereinigung. Sie verwenden keine WordPress-Konfiguration und keine echten Zugangsdaten.
+
+Ein Native-Exit oder harter Abbruch während eines tatsächlich noch laufenden externen Datenbankprozesses wird hier nicht als sicher bereinigt behauptet. Die [Wiederherstellungsanleitung](migration-recovery.md) verlangt deshalb vor administrativen Löschungen die Kontrolle sämtlicher beteiligter Prozesse. Die Tests ersetzen weder die unabhängige Sicherung einer vorab gelöschten Website noch eine Produktionsabnahme mit aktiven Erweiterungen und SSO.
+
 ## Nächste Erweiterungen
 
-Vollständige SQL-Isolation, Wiederherstellung nach harten Abbrüchen, konkurrierende Änderungen außerhalb der Migrationssperre, Erweiterungskompatibilität und reale SSO-Anmeldungen bleiben offen. Paket 4 ergänzt Format-/Integritätsprüfung, Ressourcengrenzen und Prüfungen auf Restressourcen. Die vorhandenen SQL-Prüfungen sind keine Isolation für beliebige fremde SQL-Dateien. Die hier verifizierten Tests verwenden kontrollierte Exporte und gezielt veränderte synthetische Pakete. Ein tatsächlicher GitHub-CI-Lauf dieses Standes wurde in dieser Arbeit nicht durchgeführt.
+Vollständige SQL-Isolation, konkurrierende Änderungen außerhalb der Migrationssperre, Erweiterungskompatibilität und reale SSO-Anmeldungen bleiben offen. Paket 5 ergänzt nachvollziehbare Abbruchzustände und die Wiederherstellung durch einen frischen Import nach manueller Löschung; der Umgang mit aktiven Kindprozessen und unabhängigen Netzwerksicherungen bleibt eine administrative Aufgabe. Paket 4 ergänzt Format-/Integritätsprüfung, Ressourcengrenzen und Prüfungen auf Restressourcen. Die vorhandenen SQL-Prüfungen sind keine Isolation für beliebige fremde SQL-Dateien. Die hier verifizierten Tests verwenden kontrollierte Exporte und gezielt veränderte synthetische Pakete. Ein tatsächlicher GitHub-CI-Lauf dieses Standes wurde in dieser Arbeit nicht durchgeführt.
