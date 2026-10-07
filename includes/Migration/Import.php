@@ -12,7 +12,7 @@ use WP_CLI;
 class Import extends Command
 {
     /** The wizard supplies a reviewer; direct CLI calls retain their noninteractive behavior. */
-    public function __construct(private readonly ?\Closure $review = null)
+    public function __construct(private readonly ?\Closure $review = null, private readonly ?\Closure $withoutUploads = null)
     {
     }
 
@@ -22,7 +22,7 @@ class Import extends Command
      * ## OPTIONS
      *
      * <inputfile>
-     * : Local ZIP package.
+     * : ZIP in private storage; relative to --run-dir / RRZE_MIGRATION_RUN_DIR, or an absolute path outside web roots.
      * [--new_url=<url>]
      * : Destination URL; defaults to the source URL.
      * [--mysql-single-transaction]
@@ -31,6 +31,8 @@ class Import extends Command
      * : Comma-separated post meta keys containing numeric user IDs.
      * [--dry-run]
      * : Validate and display the migration plan without writing to the destination.
+     * [--skip-uploads]
+     * : Explicitly skip media transfer, media path rewriting and media verification; handle these manually.
      * [--format=<format>]
      * : Dry-run output: text (default) or json.
      * [--run-dir=<directory>]
@@ -57,10 +59,9 @@ class Import extends Command
             if (!empty($assoc_args['new_url'])) {
                 Destination::available(SiteAddress::parse($assoc_args['new_url']));
             }
-            $filename = $args[0] ?? '';
-            $filename = str_starts_with($filename, '/') ? $filename : ABSPATH . $filename;
+            $filename = PackageStorage::input($args[0] ?? '', $assoc_args);
             if (!$dryRun) {
-                $root = Run::root($assoc_args['run-dir'] ?? (defined('RRZE_MIGRATION_RUN_DIR') ? RRZE_MIGRATION_RUN_DIR : ''), [ABSPATH, WP_CONTENT_DIR], true);
+                $root = PackageStorage::root($assoc_args, true);
                 $run = Run::create($root);
                 WP_CLI::log('Migration run: ' . $run->id);
                 $run->begin('prepare');
@@ -76,7 +77,19 @@ class Import extends Command
                 WP_CLI::log('Checking migration package...');
             }
             $package = Package::read($filename, $workspace);
-            $plan = Preflight::build($package, $workspace, $assoc_args);
+            try {
+                $plan = Preflight::build($package, $workspace, $assoc_args);
+            } catch (UnsupportedUploadLayout $limitation) {
+                if ($this->withoutUploads === null) {
+                    throw $limitation;
+                }
+                if (!(($this->withoutUploads)($limitation->getMessage()))) {
+                    throw new RuntimeException('Import cancelled before site creation. No destination changes were made.');
+                }
+                $assoc_args['skip-uploads'] = true;
+                // Rebuild the full plan from the same validated package; other errors still abort.
+                $plan = Preflight::build($package, $workspace, $assoc_args);
+            }
             $address = $plan['target'];
             if (!$dryRun) {
                 $run->plan($plan, hash('sha256', DB_NAME . '|' . $wpdb->base_prefix));
@@ -97,7 +110,7 @@ class Import extends Command
                 $run->baseline($baseline);
                 $execution->step('create_site', function () use (&$blogId, $plan, $address, $run): void {
                     $expectedId = $plan['destination']['estimated_site_id'];
-                    $guard = static function ($site) use (&$blogId, $expectedId, $run, $address): void {
+                    $guard = static function ($site) use (&$blogId, $expectedId, $run, $address, $plan): void {
                         global $wpdb;
                         $blogId = (int) $site->id;
                         $run->site($blogId);
@@ -108,7 +121,7 @@ class Import extends Command
                         if ($wpdb->last_error || $others !== null) {
                             throw new RuntimeException('Another site claimed the destination during site allocation.');
                         }
-                        Destination::resources($blogId);
+                        Destination::resources($blogId, $plan['skipUploads']);
                         if (!add_site_meta($blogId, 'rrze_migration_run', $run->id, true)) {
                             throw new RuntimeException('Cannot mark the newly created site as owned by this run.');
                         }
@@ -127,15 +140,20 @@ class Import extends Command
                 $owned = static fn () => Verification::site($blogId, $run->id, $address);
                 WP_CLI::log('Importing into new site ' . $blogId . '...');
                 $execution->step('import_tables', fn () => $this->import_tables($workspace . '/tables.sql', array_keys($plan['mapping']), array_values($plan['mapping'])), $owned);
-                $execution->step('replace_urls', fn () => $this->replace_urls(array_values($plan['mapping']), $plan['meta'], $plan['source'], $address, $blogId), $owned);
+                $execution->step('replace_urls', fn () => $this->replace_urls(array_values($plan['mapping']), $plan['meta'], $plan['source'], $address, $blogId, $plan['skipUploads']), $owned);
                 $execution->step('configure_site', fn () => $this->configure_site($plan['meta'], $address, $blogId), $owned);
                 $ids = $execution->step('import_users', fn () => $this->import_users($plan['users'], $blogId, $execution), $owned);
                 $execution->step('remap_references', fn () => Posts::remap($blogId, $ids, $plan['fields']), $owned);
-                $execution->step('import_uploads', function () use ($workspace, $blogId, $plan, $execution): void {
-                    if (is_dir($workspace . '/wp-content/uploads')) {
-                        $this->move_uploads($workspace . '/wp-content/uploads', $blogId, $plan['destination']['uploads_directory'], $execution);
-                    }
-                }, $owned);
+                if ($plan['skipUploads']) {
+                    $run->skipUploads();
+                    WP_CLI::warning(Preflight::MANUAL_UPLOADS_NOTICE);
+                } else {
+                    $execution->step('import_uploads', function () use ($workspace, $blogId, $plan, $execution): void {
+                        if (is_dir($workspace . '/wp-content/uploads')) {
+                            $this->move_uploads($workspace . '/wp-content/uploads', $blogId, $plan['destination']['uploads_directory'], $execution);
+                        }
+                    }, $owned);
+                }
                 $execution->step('finalize', static function () use ($blogId): void {
                     global $wpdb;
                     switch_to_blog($blogId);
@@ -149,6 +167,7 @@ class Import extends Command
                     }
                 }, $owned);
                 $execution->step('verify', static fn () => Verification::result($plan, $package, $blogId, $run->id, $ids, $baseline), $owned);
+                $run->verifiedUploads();
             }
         } catch (\Throwable $failure) {
             $error = $failure->getMessage();
@@ -194,6 +213,8 @@ class Import extends Command
                 self::show_plan($plan['report']);
                 WP_CLI::success('Dry-run complete. No site, users, tables or uploads were created.');
             }
+        } elseif ($plan['skipUploads']) {
+            WP_CLI::success('Site data imported at ' . $address['url'] . ' Uploads were skipped; manual media transfer, path configuration and verification remain required.');
         } else {
             WP_CLI::success('All done, your new site is available at ' . $address['url']);
         }
@@ -227,9 +248,12 @@ class Import extends Command
         Utils::checked_command('db import', [$filename]);
     }
 
-    private function replace_urls(array $targetTables, array $meta, array $source, array $target, int $blogId): void
+    private function replace_urls(array $targetTables, array $meta, array $source, array $target, int $blogId, bool $skipUploads): void
     {
         Utils::checked_command('search-replace', [Utils::parse_url_for_search_replace($source['url']), Utils::parse_url_for_search_replace($target['url']), ...$targetTables], ['precise' => true], ['url' => $target['url']]);
+        if ($skipUploads) {
+            return;
+        }
         $from = 'wp-content/uploads' . ($meta['blog_id'] > 1 ? '/sites/' . $meta['blog_id'] : '');
         $to = 'wp-content/uploads/sites/' . $blogId;
         Utils::checked_command('search-replace', [$from, $to, ...$targetTables], ['precise' => true], ['url' => $target['url']]);

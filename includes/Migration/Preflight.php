@@ -7,8 +7,14 @@ use RuntimeException;
 /** Shared planning logic for CLI execution, dry-run and the interactive wizard. */
 final class Preflight
 {
+    public const MANUAL_UPLOADS_NOTICE = 'Uploads are skipped. Transfer media separately (for example with rsync), configure the destination upload location and adjust media paths/URLs manually. The general site URL replacement still runs, but upload site-ID paths are not rewritten. Media and custom upload locations are not verified.';
+
     public static function build(array $package, string $workspace, array $options): array
     {
+        $skipUploads = $options['skip-uploads'] ?? false;
+        if (!is_bool($skipUploads)) {
+            throw new RuntimeException('Use --skip-uploads as a flag without a value.');
+        }
         $meta = $package['meta'];
         Files::memory($package['files']['tables.sql']['bytes'] * 6 + $package['files']['users.csv']['bytes'] * 8 + 16777216);
         $source = SiteAddress::parse($meta['url']);
@@ -22,7 +28,7 @@ final class Preflight
             }
         }
         $uploads = array_filter($package['files'], static fn ($name) => str_starts_with($name, 'wp-content/uploads/'), ARRAY_FILTER_USE_KEY);
-        $destination = Destination::inspect($target, array_sum(array_column($uploads, 'bytes')));
+        $destination = Destination::inspect($target, array_sum(array_column($uploads, 'bytes')), $skipUploads);
         $mapping = [];
         foreach ($tables as $table) {
             $mapped = $destination['prefix'] . substr($table, strlen($meta['db_prefix']));
@@ -43,7 +49,10 @@ final class Preflight
                 'action' => $row['target_id'] === null ? 'create_wordpress_user' : 'add_site_membership',
                 'target_id' => $row['target_id'],
             ], $users),
-            'uploads' => ['included' => $meta['uploads_included'], 'files' => count($uploads), 'bytes' => array_sum(array_column($uploads, 'bytes')),
+            'uploads' => ['included' => $meta['uploads_included'], 'skipped' => $skipUploads,
+                'transfer' => $meta['uploads_included'] && !$skipUploads, 'verified' => false,
+                'manual_transfer_required' => $skipUploads || !$meta['uploads_included'],
+                'files' => count($uploads), 'bytes' => array_sum(array_column($uploads, 'bytes')),
                 'excluded_directories' => $meta['excluded_upload_directories'] ?? []],
             'user_reference_fields' => $fields,
             'limitations' => [
@@ -52,13 +61,15 @@ final class Preflight
                 'Database server disk space, extension compatibility and real SSO login require operational verification.',
             ],
         ];
-        if (!$meta['uploads_included']) {
+        if ($skipUploads) {
+            $report['limitations'][] = self::MANUAL_UPLOADS_NOTICE;
+        } elseif (!$meta['uploads_included']) {
             $report['limitations'][] = 'Media are not included. A separate media transfer is not verified.';
         }
         if ($report['uploads']['excluded_directories']) {
             $report['limitations'][] = 'Explicitly excluded upload directories are not transferred or verified.';
         }
-        return compact('meta', 'source', 'target', 'users', 'fields', 'mapping', 'destination', 'report');
+        return compact('meta', 'source', 'target', 'users', 'fields', 'mapping', 'destination', 'report', 'skipUploads');
     }
 
     public static function tables(string $filename, array $meta): array

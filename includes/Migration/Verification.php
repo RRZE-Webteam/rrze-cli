@@ -81,6 +81,9 @@ final class Verification
         } finally {
             restore_current_blog();
         }
+        if ($plan['skipUploads']) {
+            return;
+        }
         foreach ($package['files'] as $name => $entry) {
             if (!str_starts_with($name, 'wp-content/uploads/')) {
                 continue;

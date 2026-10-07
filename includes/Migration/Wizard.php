@@ -76,11 +76,17 @@ final class Wizard extends Command
     private function exportSite(Terminal $terminal): void
     {
         $terminal->line('The current website is the export source. Select another source with the global --url option before starting.');
-        $file = $terminal->ask('New ZIP filename (relative to the WordPress directory)', 'website.zip');
+        $root = $this->storage($terminal);
+        $file = $terminal->ask('New ZIP filename (without a directory)', 'website.zip', static function ($value) use ($root): void {
+            PackageStorage::exportPath($root, $value, get_current_blog_id());
+        });
         $terminal->line('Subsite-owned tables are selected automatically. Main-site custom tables need explicit selection after an ownership check.');
         $tables = $terminal->ask('Additional site-owned tables, comma-separated (optional)');
         $media = $terminal->choice('Include uploads', ['yes', 'no'], 'yes');
-        $options = $tables === '' ? [] : ['custom-tables' => $tables];
+        $options = ['run-dir' => $root];
+        if ($tables !== '') {
+            $options['custom-tables'] = $tables;
+        }
         if ($media === 'yes') {
             $options['uploads'] = true;
             $terminal->line('Upload directories are included unless explicitly excluded. Server configuration and executable files block the export.');
@@ -106,11 +112,9 @@ final class Wizard extends Command
             throw new RuntimeException('Migration requires a multisite destination and always creates a new site.');
         }
         $terminal->line('Existing destinations must be deleted manually in Network Admin. The wizard never deletes or overwrites a website.');
-        $file = $terminal->ask('ZIP package (relative to the WordPress directory)', '', static function ($value): void {
-            $path = str_starts_with($value, '/') ? $value : ABSPATH . $value;
-            if ($value === '' || str_contains($value, '://') || !is_file($path) || !is_readable($path)) {
-                throw new RuntimeException('Enter a readable local ZIP filename.');
-            }
+        $options = ['run-dir' => $this->storage($terminal)];
+        $file = $terminal->ask('ZIP package (relative to the private migration directory, or absolute)', '', static function ($value) use ($options): void {
+            PackageStorage::input($value, $options);
         });
         $url = $terminal->ask('New destination URL (including the website path)', '', static function ($value): void {
             if (!preg_match('~^https?://~i', $value)) {
@@ -119,12 +123,16 @@ final class Wizard extends Command
             Destination::available(SiteAddress::parse($value));
         });
         $fields = $terminal->ask('Post meta keys with numeric user IDs, comma-separated (optional)');
-        $options = ['new_url' => $url, 'uid_fields' => $fields];
+        $options += ['new_url' => $url, 'uid_fields' => $fields];
+        $withoutUploads = static function (string $limitation) use ($terminal): bool {
+            $terminal->line('Upload limitation: ' . $limitation);
+            $terminal->line(Preflight::MANUAL_UPLOADS_NOTICE);
+            return $terminal->confirm('Continue without uploads');
+        };
         if ($terminal->choice('Next action', ['preview', 'import'], 'preview') === 'preview') {
-            (new Import())->all([$file], $options + ['dry-run' => true]);
+            (new Import(null, $withoutUploads))->all([$file], $options + ['dry-run' => true]);
             return;
         }
-        $options['run-dir'] = $terminal->ask('Private persistent run directory outside web roots', defined('RRZE_MIGRATION_RUN_DIR') ? RRZE_MIGRATION_RUN_DIR : '');
         (new Import(static function (array $plan) use ($terminal): bool {
             $terminal->line('Import plan');
             foreach (Plan::lines($plan) as $line) {
@@ -132,13 +140,22 @@ final class Wizard extends Command
             }
             $terminal->line('Existing global users remain unchanged; missing WordPress accounts receive random local passwords. This does not create SSO identities.');
             $terminal->line('The private package copy and journal are retained even after cancellation. A failed import may leave an incomplete site for manual recovery.');
-            if (!$plan['uploads']['included'] && !$terminal->confirm('Media are absent; a separate transfer is not verified. Continue')) {
+            if (!$plan['uploads']['skipped'] && !$plan['uploads']['included'] && !$terminal->confirm('Media are absent; a separate transfer is not verified. Continue')) {
                 return false;
             }
-            if (($plan['uploads']['excluded_directories'] ?? []) && !$terminal->confirm('Listed upload directories were excluded and will not be restored. Continue')) {
+            if (!$plan['uploads']['skipped'] && ($plan['uploads']['excluded_directories'] ?? []) && !$terminal->confirm('Listed upload directories were excluded and will not be restored. Continue')) {
                 return false;
             }
             return $terminal->identity('New destination', $plan['destination']) && $terminal->confirm('Create the new website and execute this plan now');
-        }))->all([$file], $options);
+        }, $withoutUploads))->all([$file], $options);
+    }
+
+    private function storage(Terminal $terminal): string
+    {
+        $root = $terminal->ask('Private migration directory outside web roots', defined('RRZE_MIGRATION_RUN_DIR') ? RRZE_MIGRATION_RUN_DIR : '', static function ($value): void {
+            PackageStorage::root(['run-dir' => $value]);
+        });
+        $terminal->line('ZIP packages belong in this private directory. Each export and import uses its own subdirectory.');
+        return $root;
     }
 }

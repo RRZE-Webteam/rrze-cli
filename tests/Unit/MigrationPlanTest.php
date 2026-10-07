@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 use RRZE\CLI\Migration\Plan;
+use RRZE\CLI\Migration\Preflight;
 
 final class MigrationPlanTest extends TestCase
 {
@@ -23,5 +24,22 @@ final class MigrationPlanTest extends TestCase
     {
         $this->expectExceptionMessage('plan changed during review');
         Plan::assertUnchanged(['users' => [['action' => 'create_wordpress_user', 'target_id' => null]]], ['users' => [['action' => 'add_site_membership', 'target_id' => 12]]]);
+    }
+
+    public function testManualTransferDecisionCannotChangeAfterApproval(): void
+    {
+        $approved = ['destination_details' => ['storage' => null], 'uploads' => ['skipped' => true]];
+        Plan::assertUnchanged($approved, $approved);
+        $this->addToAssertionCount(1);
+        $current = $approved;
+        $current['uploads']['skipped'] = false;
+        $this->expectExceptionMessage('plan changed during review');
+        Plan::assertUnchanged($approved, $current);
+    }
+
+    public function testStringFalseCannotBeMistakenForConsentToSkipUploads(): void
+    {
+        $this->expectExceptionMessage('flag without a value');
+        Preflight::build([], '', ['skip-uploads' => 'false']);
     }
 }

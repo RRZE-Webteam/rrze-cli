@@ -153,4 +153,39 @@ final class MigrationRunTest extends TestCase
         self::assertSame('started', $observed['steps']['import_tables']['status']);
         self::assertSame('running', json_decode(file_get_contents($path), true)['status'], 'Status reads must not rewrite the checkpoint.');
     }
+
+    public function testUploadsCannotBeSkippedWithoutAnExplicitPlan(): void
+    {
+        $run = Run::create($this->root);
+        try {
+            $this->expectExceptionMessage('explicit manual-transfer plan');
+            $run->skipUploads();
+        } finally {
+            $run->finish('failed');
+        }
+    }
+
+    public function testUploadsCannotBeMarkedVerifiedBeforeVerification(): void
+    {
+        $run = Run::create($this->root);
+        try {
+            $this->expectExceptionMessage('before result verification');
+            $run->verifiedUploads();
+        } finally {
+            $run->finish('failed');
+        }
+    }
+
+    public function testOtherStepsCannotClaimToBeSkipped(): void
+    {
+        $run = Run::create($this->root);
+        $run->begin('import_tables');
+        $run->finish('failed');
+        $path = $run->directory . '/run.json';
+        $state = json_decode(file_get_contents($path), true);
+        $state['steps']['import_tables']['status'] = 'skipped';
+        file_put_contents($path, json_encode($state));
+        $this->expectExceptionMessage('Invalid skipped');
+        Run::read($this->root, $run->id);
+    }
 }

@@ -23,6 +23,7 @@ final class Sandbox
     private ?mysqli $database = null;
     private array $createdDatabases = [];
     private bool $closed = false;
+    private ?string $exportedPackage = null;
 
     public function __construct()
     {
@@ -236,14 +237,23 @@ final class Sandbox
 
     public function exportPackage(): string
     {
-        $package = $this->root . '/source/fixture.zip';
-        if (!is_file($package)) {
+        if ($this->exportedPackage === null) {
             $this->wp('source', ['rrze-migration', 'export', 'all', 'fixture.zip', '--url=http://source.test/source/', '--uploads']);
+            $packages = glob($this->root . '/runs-source/export-*/fixture.zip');
+            if (count($packages) !== 1) {
+                throw new RuntimeException('Expected exactly one initial private export package.');
+            }
+            $this->exportedPackage = $packages[0];
         }
-        if (!is_file($package) || !copy($package, $this->root . '/target/fixture.zip')) {
+        $target = $this->root . '/runs-target';
+        if (!is_dir($target)) {
+            mkdir($target, 0700);
+        }
+        if (!is_file($this->exportedPackage) || !copy($this->exportedPackage, $target . '/fixture.zip')) {
             throw new RuntimeException('Export package was not created or transferred.');
         }
-        return $package;
+        chmod($target . '/fixture.zip', 0600);
+        return $this->exportedPackage;
     }
 
     public function close(): void

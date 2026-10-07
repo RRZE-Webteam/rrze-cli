@@ -19,7 +19,7 @@ final class Destination
         }
     }
 
-    public static function inspect(array $address, int $uploadBytes): array
+    public static function inspect(array $address, int $uploadBytes, bool $skipUploads = false): array
     {
         global $wpdb;
         self::available($address);
@@ -36,10 +36,10 @@ final class Destination
             throw new RuntimeException('Cannot determine the next destination site ID.');
         }
         $id = (int) $status->Auto_increment;
-        $uploads = self::resources($id);
+        $uploads = self::resources($id, $skipUploads);
         return ['network_id' => get_current_network_id(), 'estimated_site_id' => $id,
             'prefix' => $wpdb->get_blog_prefix($id), 'uploads_directory' => $uploads,
-            'storage' => Files::capacity($uploads, $uploadBytes + 16777216)];
+            'storage' => $skipUploads ? null : Files::capacity($uploads, $uploadBytes + 16777216)];
     }
 
     public static function uploadPath(int $id): string
@@ -49,8 +49,13 @@ final class Destination
         if (!defined('MULTISITE') || defined('UPLOADS') || defined('BLOGUPLOADDIR')
             || get_site_option('ms_files_rewriting') || has_filter('upload_dir')
             || ($custom && $custom !== 'wp-content/uploads')) {
-            throw new RuntimeException('Custom upload paths, upload filters and legacy multisite uploads require a separately supported migration adapter.');
+            throw new UnsupportedUploadLayout('Custom upload paths, upload filters and legacy multisite uploads require a separately supported migration adapter. Use --skip-uploads only if media will be transferred and configured manually.');
         }
+        return self::standardUploadPath($id);
+    }
+
+    private static function standardUploadPath(int $id): string
+    {
         $content = realpath(WP_CONTENT_DIR);
         if ($content === false) {
             throw new RuntimeException('Cannot resolve the destination content directory.');
@@ -65,7 +70,7 @@ final class Destination
         return $path;
     }
 
-    public static function resources(int $id): string
+    public static function resources(int $id, bool $skipUploads = false): ?string
     {
         global $wpdb;
         $prefix = $wpdb->get_blog_prefix($id);
@@ -80,10 +85,12 @@ final class Destination
         if ($wpdb->last_error || $memberships !== null) {
             throw new RuntimeException('Pre-existing membership metadata for the new site ID blocks migration.');
         }
-        $uploads = self::uploadPath($id);
+        // Even manual transfers cannot bypass known leftovers or links in the standard location.
+        // A custom location is deliberately not resolved, created or written by this importer.
+        $uploads = $skipUploads ? self::standardUploadPath($id) : self::uploadPath($id);
         if (file_exists($uploads) || is_link($uploads)) {
             throw new RuntimeException('Pre-existing uploads for the new site ID block migration. Inspect the leftovers manually.');
         }
-        return $uploads;
+        return $skipUploads ? null : $uploads;
     }
 }

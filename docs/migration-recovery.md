@@ -4,10 +4,10 @@ Ein Import legt eine neue Website an. Paket 5 protokolliert die Ausführung und 
 
 ## Privaten Speicherort einrichten
 
-Echte Importe benötigen `--run-dir` oder die Konstante `RRZE_MIGRATION_RUN_DIR` in der Zielkonfiguration. Der absolute Pfad muss außerhalb der WordPress- und Content-Verzeichnisse liegen. Die Administration muss zusätzlich ausschließen, dass ein anderer Webserver oder eine Freigabe dieses Verzeichnis veröffentlicht. Sein Elternverzeichnis muss existieren; das Laufverzeichnis wird bei Bedarf mit Modus `0700` angelegt. Bestehende öffentliche Verzeichnisse werden abgelehnt und nicht automatisch umkonfiguriert.
+ZIP-Exporte und echte Importe verwenden gemeinsam `--run-dir` beziehungsweise die Konstante `RRZE_MIGRATION_RUN_DIR` in der jeweiligen Installation als privates Stammverzeichnis. Der absolute Pfad muss außerhalb der WordPress- und Content-Verzeichnisse liegen. Die Administration muss zusätzlich ausschließen, dass ein anderer Webserver oder eine Freigabe dieses Verzeichnis veröffentlicht. Sein Elternverzeichnis muss existieren; das Laufverzeichnis wird bei Bedarf mit Modus `0700` angelegt. Bestehende öffentliche Verzeichnisse werden abgelehnt und nicht automatisch umkonfiguriert.
 
 ```sh
-wp rrze-migration import all website.zip \
+wp rrze-migration import all incoming/website.zip \
   --new_url=https://target.example.test/new-site/ \
   --run-dir=/srv/private/rrze-migrations
 ```
@@ -18,7 +18,9 @@ Alternativ:
 define('RRZE_MIGRATION_RUN_DIR', '/srv/private/rrze-migrations');
 ```
 
-Ein Dry-run benötigt dieses Verzeichnis nicht und erzeugt dort keine Laufdaten. Es gelten dieselben Paket- und Zielprüfungen wie bisher.
+ZIP-Exporte landen in neuen Unterordnern `export-<UTC-Zeitstempel>-site-<ID>-<Zufallskennung>`. Importläufe verwenden weiterhin eigene Unterordner mit ihrer Laufkennung; bestehende Journale bleiben am bisherigen Ort lesbar. Relative Importpfade beziehen sich auf dieses Stammverzeichnis. Ein Dry-run mit absolutem privaten Eingabepfad benötigt keine konfigurierte Ablage; bei einem relativen Pfad wird sie zum Auffinden des Pakets benötigt. Die Vorschau legt weder das Stammverzeichnis noch Laufdaten an.
+
+Eingehende Pakete müssen bereits außerhalb von WordPress und `wp-content` liegen. Für den Transfer von einem anderen Server kann beispielsweise ein eigener privater Unterordner `incoming` vorbereitet werden. Eine bisher im Webroot liegende ZIP-Datei zuerst selbst in private Ablage verschieben. Der Import kopiert das Paket und lässt die Eingabedatei unverändert. Exporte werden wie Importläufe nicht automatisch nach einer Frist gelöscht.
 
 Pro Lauf entsteht ein Verzeichnis mit einer zufälligen Kennung. Es enthält `package.zip`, `run.json` und `active.lock`. Dateien erhalten Modus `0600`. Das Paket wird vor der Prüfung privat kopiert; Prüfung und Ausführung verwenden diese Kopie. Eine spätere Änderung oder Löschung der ursprünglich übergebenen Datei verändert die aufbewahrte Kopie nicht. Der abschließende Status prüft deren SHA-256-Wert.
 
@@ -42,12 +44,14 @@ Das Protokoll enthält IDs, Zielressourcen, Benutzer-ID-Zuordnungen, Dateizähle
 | Zustand | Bedeutung |
 | --- | --- |
 | `active` | Der Lauf hält seine Dateisperre. Nicht aufräumen oder parallel wiederherstellen. |
-| `completed` | Alle Schritte einschließlich Ergebnisprüfung und Arbeitsverzeichnis-Bereinigung wurden erfolgreich protokolliert. |
+| `completed` | Der gewählte Importumfang einschließlich Ergebnisprüfung und Arbeitsverzeichnis-Bereinigung wurde erfolgreich protokolliert. Bei `--skip-uploads` bleiben die manuellen Medienarbeiten offen. |
 | `failed` | Ein behandelter Fehler hat den Ablauf gestoppt. `failure_step` nennt den zuletzt betroffenen Schritt; bereits ausgeführte Änderungen bleiben bestehen. |
 | `interrupted` | Ein Abbruch wurde erkannt und protokolliert. Bereits ausgeführte Änderungen bleiben bestehen. |
 | `interrupted_or_unfinished` | Das Protokoll meldet noch einen laufenden Vorgang, dessen Dateisperre aber nicht mehr gehalten wird. Der letzte Schritt kann teilweise oder vollständig ausgeführt sein. Es erfolgt keine automatische Schlussfolgerung aus einem verschwundenen Prozess. |
 
 Die Installationssperre umfasst alle rrze-cli-Importe derselben Datenbank und desselben Basispräfixes, auch bei unterschiedlichen Zieladressen. Sie schützt gemeinsam genutzte Benutzer und die Site-ID-Vergabe. Sie blockiert keine normalen WordPress-Anfragen oder fremden Administrationswerkzeuge. Eine Wiederverbindung zur Datenbank ersetzt die Sperre nicht: Wird sie verloren, stoppt der nächste geprüfte Schritt.
+
+Bei ausdrücklich übersprungenen Uploads enthält der Medien-Schritt `skipped` mit Grund `manual_transfer`. Das Journal bewahrt `uploads.skipped: true`, `uploads.transfer: false`, `uploads.verified: false` und `manual_transfer_required: true`; es nennt keinen aufgelösten Upload-Zielpfad. Status und Abschlussmeldung weisen auf den separaten Transfer, die Konfiguration von Pfaden/URLs und die ausstehende Medienprüfung hin. `completed` bestätigt in diesem Fall ausschließlich den gewählten Datenimport. Auch nach einem externen `rsync` aktualisiert der Statusbefehl den Mediennachweis nicht automatisch. Bei einem erneuten Import muss `--skip-uploads` wieder ausdrücklich gewählt werden.
 
 ## Einen Abbruch behandeln
 
@@ -75,6 +79,6 @@ wp rrze-migration import all /srv/private/rrze-migrations/RUN_ID/package.zip \
 
 Bei verfügbarem PCNTL fordert `SIGINT` oder `SIGTERM` einen Abbruch an einer geprüften Grenze an. Ein laufender Datenbankbefehl muss zunächst zurückkehren; der Vorgang wird nicht als atomar rückgängig gemacht. Ohne PCNTL oder bei `SIGKILL`, Stromausfall und ähnlichen Abbrüchen bleibt gegebenenfalls nur der letzte Checkpoint.
 
-Die Ergebnisprüfung kontrolliert Zielzugehörigkeit, Tabellen, URLs, Benutzerrollen und -referenzen sowie die Hashes der enthaltenen Medien. Globale Daten bereits vorhandener beteiligter Benutzer dürfen sich gegenüber dem Ausgangszustand ausschließlich um die Mitgliedschaft der neuen Website unterscheiden. Ändert ein anderer Prozess währenddessen beispielsweise deren Profil oder Sitzungen, kann die konservative Prüfung ebenfalls abbrechen. Solche Unterschiede werden nicht automatisch zurückgeschrieben.
+Die Ergebnisprüfung kontrolliert Zielzugehörigkeit, Tabellen, URLs, Benutzerrollen und -referenzen sowie die Hashes der automatisch übertragenen Medien. Globale Daten bereits vorhandener beteiligter Benutzer dürfen sich gegenüber dem Ausgangszustand ausschließlich um die Mitgliedschaft der neuen Website unterscheiden. Ändert ein anderer Prozess währenddessen beispielsweise deren Profil oder Sitzungen, kann die konservative Prüfung ebenfalls abbrechen. Solche Unterschiede werden nicht automatisch zurückgeschrieben.
 
 Die ursprüngliche Website nach einer vorherigen manuellen Löschung wiederherzustellen, globale Fremdänderungen rückgängig zu machen oder beliebiges fremdes SQL auszuführen, ist nicht durch dieses Protokoll abgesichert. Dafür bleiben unabhängige Sicherungen, ein abgestimmtes Wartungsfenster und eine gesonderte Betriebsabnahme erforderlich. Globale Benutzer- oder Netzwerktabellen dürfen nicht pauschal über eine weiterbetriebene Multisite zurückgespielt werden.

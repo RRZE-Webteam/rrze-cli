@@ -47,7 +47,7 @@ final class Run
         });
     }
 
-    public static function root(string $path, array $webRoots, bool $create): string
+    public static function root(string $path, array $webRoots, bool $create, bool $allowMissing = false): string
     {
         if ($path === '' || !str_starts_with($path, '/') || str_contains($path, '://')
             || preg_match('~(?:^|/)\.\.?(?:/|$)~', $path) || is_link($path)) {
@@ -66,6 +66,9 @@ final class Run
         }
         if (!file_exists($resolved) && $create && !mkdir($resolved, 0700)) {
             throw new RuntimeException('Cannot create the migration run directory.');
+        }
+        if (!file_exists($resolved) && $allowMissing) {
+            return $resolved;
         }
         clearstatcache(true, $resolved);
         if (!is_dir($resolved) || (fileperms($resolved) & 0077) !== 0
@@ -110,6 +113,7 @@ final class Run
         $this->state['network_id'] = $plan['destination']['network_id'];
         $this->state['tables'] = array_values($plan['mapping']);
         $this->state['uploads_directory'] = $plan['destination']['uploads_directory'];
+        $this->state['uploads'] = $plan['report']['uploads'];
         $this->state['user_reference_fields'] = $plan['fields'];
         $this->save();
     }
@@ -138,6 +142,29 @@ final class Run
     {
         $this->state['site_id'] = $id;
         $this->save();
+    }
+
+    public function skipUploads(): void
+    {
+        if (($this->state['uploads']['skipped'] ?? false) !== true) {
+            throw new RuntimeException('Skipping uploads requires an explicit manual-transfer plan.');
+        }
+        $this->begin('import_uploads');
+        $this->state['steps']['import_uploads']['status'] = 'skipped';
+        $this->state['steps']['import_uploads']['reason'] = 'manual_transfer';
+        $this->state['steps']['import_uploads']['finished_at'] = gmdate('c');
+        $this->save();
+    }
+
+    public function verifiedUploads(): void
+    {
+        if (($this->state['steps']['verify']['status'] ?? null) !== 'completed') {
+            throw new RuntimeException('Uploads cannot be marked verified before result verification.');
+        }
+        if (!empty($this->state['uploads']['transfer'])) {
+            $this->state['uploads']['verified'] = true;
+            $this->save();
+        }
     }
 
     public function workspace(string $path): void
@@ -244,8 +271,13 @@ final class Run
             }
             foreach ($state['steps'] as $step => $details) {
                 if (!in_array($step, self::STEPS, true) || !is_array($details)
-                    || !in_array($details['status'] ?? null, ['started', 'completed'], true)) {
+                    || !in_array($details['status'] ?? null, ['started', 'completed', 'skipped'], true)) {
                     throw new RuntimeException('Invalid migration step checkpoint.');
+                }
+                if ($details['status'] === 'skipped' && ($step !== 'import_uploads'
+                    || ($state['uploads']['skipped'] ?? null) !== true
+                    || ($details['reason'] ?? null) !== 'manual_transfer')) {
+                    throw new RuntimeException('Invalid skipped migration step checkpoint.');
                 }
             }
             if ($state['status'] === 'completed' && (($state['steps']['verify']['status'] ?? null) !== 'completed'

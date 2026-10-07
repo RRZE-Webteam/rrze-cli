@@ -18,6 +18,27 @@ The safety requirements and remaining acceptance work are documented in [Migrati
 
 An import creates a **new site in a multisite**. Existing sites block the import, including empty, archived, disabled or deleted-flagged sites. Delete an old destination manually in Network Admin before importing. Single-site destinations and direct table/user imports are rejected.
 
+### Private package storage
+
+Configure `RRZE_MIGRATION_RUN_DIR` in the source and destination installations, or pass `--run-dir` to the export/import command:
+
+```php
+define('RRZE_MIGRATION_RUN_DIR', '/srv/private/rrze-migrations');
+```
+
+The directory must be outside WordPress and `wp-content`, owned by the CLI user with permissions `0700`, and not published by another web-server configuration. Its parent must exist. ZIP exports create a new subdirectory containing a UTC timestamp, source site ID and random suffix; the ZIP has permissions `0600`. Import runs retain their existing independent run-ID directories:
+
+```text
+/srv/private/rrze-migrations/
+  export-20261007-103000-site-5-<random>/website.zip
+  incoming/website.zip                 # optional location for packages transferred from another server
+  <run-id>/package.zip
+           run.json
+           active.lock
+```
+
+Relative import paths resolve against this private root, never against the WordPress directory. Use the export's displayed absolute path (or its path relative to this root) on the same system, or transfer the ZIP into a private location on the destination, for example `incoming/website.zip`. Absolute input paths outside WordPress and `wp-content` are also accepted. Webroot packages are rejected; move old packages to private storage yourself before importing. The importer neither moves nor deletes the original. A dry-run with an absolute private input needs no configured root and creates no persistent storage. Exports and imports are retained until the administrator removes them.
+
 ### Export
 
 Run from the source WordPress directory:
@@ -26,7 +47,7 @@ Run from the source WordPress directory:
 wp rrze-migration export all website.zip --url=https://source.example.test/site/ --uploads
 ```
 
-Existing output files are never replaced. Temporary JSON, CSV and SQL files are stored in a private directory and removed after success or a handled failure.
+The output argument is a filename without a directory; `.zip` is appended if missing. Every export gets its own private subdirectory, so repeated filenames keep earlier exports intact. The wizard displays the full destination before approval, and the command prints it after success. Cancellation creates no export directory; handled failures remove the incomplete export. Temporary JSON, CSV and SQL files are stored in a private directory and removed after success or a handled failure.
 
 Uploads containing server configuration or executable files, such as `.htaccess` or `index.php`, block export and the error names the offending path. To omit a plugin's backup or temporary directory deliberately, use an explicit directory exclusion:
 
@@ -42,7 +63,7 @@ Core tables and site-owned custom tables of a subsite are selected by default. F
 wp rrze-migration export all website.zip --url=https://source.example.test/ --custom-tables=wp_local_data --uploads
 ```
 
-`--custom-tables` adds to the default selection. `--tables` selects an explicit list, but a full ZIP package must still contain every core site table. Global user/network tables and other sites' tables cannot be selected. Separate SQL and CSV exports remain available through `export tables` and `export users`.
+`--custom-tables` adds to the default selection. `--tables` selects an explicit list, but a full ZIP package must still contain every core site table. Global user/network tables and other sites' tables cannot be selected. Separate SQL and CSV exports remain available through `export tables` and `export users`; those low-level commands still use their explicit output paths, so choose an absolute private path for sensitive data.
 
 ### Interactive wizard
 
@@ -53,7 +74,7 @@ wp rrze-migration wizard export --url=https://source.example.test/site/
 wp rrze-migration wizard import
 ```
 
-The export wizard shows the selected source and tables, includes uploads by default, and requires the source URL plus explicit confirmation before creating a new archive. The import wizard asks for the package, new destination URL and numeric user-reference fields. Its default action is a read-only preview. To execute, choose `import`, provide the private run directory, review the plan, type the complete normalized destination URL and answer `yes` to the final confirmation. Empty confirmation means cancellation; `!quit`, end of input and supported cancellation signals also stop the wizard.
+Both wizard operations first ask for the private migration directory, using `RRZE_MIGRATION_RUN_DIR` as the default. The export wizard shows the selected source and tables, includes uploads by default, and requires the source URL plus explicit confirmation before creating a new archive. The import wizard asks for the package, new destination URL and numeric user-reference fields. Its default action is a read-only preview. To execute, choose `import`, review the plan, type the complete normalized destination URL and answer `yes` to the final confirmation. Empty confirmation means cancellation; `!quit`, end of input and supported cancellation signals also stop the wizard.
 
 The wizard uses the same export/import implementation and preflight as the direct commands. Import approval applies to the preserved package copy and the displayed plan. A changed site allocation, table mapping or user action during review stops execution before site creation. Cancelled imports can retain a private journal and package with status `failed`, no site ID and a completed cleanup checkpoint. Use the existing status command to inspect them.
 
@@ -66,8 +87,8 @@ When uploads are enabled, the export wizard also asks for optional directory exc
 Validate a package and display the planned changes before importing:
 
 ```sh
-wp rrze-migration import all website.zip --new_url=https://target.example.test/new-site/ --dry-run
-wp rrze-migration import all website.zip --new_url=https://target.example.test/new-site/ --dry-run --format=json
+wp rrze-migration import all incoming/website.zip --new_url=https://target.example.test/new-site/ --dry-run
+wp rrze-migration import all incoming/website.zip --new_url=https://target.example.test/new-site/ --dry-run --format=json
 ```
 
 Both commands use the same preflight as execution. The plan shows the source and destination, estimated site ID, table mapping, existing/new WordPress user actions, media files and destination storage. A dry-run creates only private temporary extraction files and removes them afterwards; it does not create sites, users, tables or destination uploads. Normal WordPress/plugin bootstrap still runs. JSON plans include SSO logins and local paths; treat saved plans as internal operational data.
@@ -78,27 +99,36 @@ Packages use format version 1 in `site.json`, with exact filenames, sizes and SH
 
 Current bounds: 2 GiB ZIP, 4 GiB expanded data, 100,000 entries, 512 MiB per media file, 64 MiB SQL, 16 MiB CSV, 4 MiB metadata and 10,000 users. Entries larger than 1 MiB must not exceed a 200:1 compression ratio. Available PHP memory, temporary storage and upload storage are checked conservatively; these checks cannot reserve capacity or determine free space on the database server.
 
-Destination preflight requires explicit database/schema grants sufficient for the migration. Grants available only through roles or individual tables are not yet supported. Standard multisite uploads under `wp-content/uploads/sites/<ID>` are supported; custom upload paths, upload filters and legacy `ms-files.php` layouts need a migration adapter and currently block the import. Source upload path options are reset for the newly created destination.
+Destination preflight requires explicit database/schema grants sufficient for the migration. Grants available only through roles or individual tables are not yet supported. Automatic media transfer supports standard multisite uploads under `wp-content/uploads/sites/<ID>`. Custom upload paths, upload filters and legacy `ms-files.php` layouts require a migration adapter or an explicit import without uploads. Source upload path options are reset for the newly created destination.
+
+When that upload-layout limitation occurs, the wizard explains it and asks `Continue without uploads (yes/no) [no]` in both preview and import. Enter cancels. Choosing `yes` rebuilds the plan with media handling delegated to the administrator; a preview still creates no site, and an import still requires the destination URL and final confirmation. Other errors do not offer this fallback. Scripts opt in with `--skip-uploads`:
+
+```sh
+wp rrze-migration import all incoming/website.zip --new_url=https://target.example.test/new-site/ --skip-uploads --dry-run --format=json
+wp rrze-migration import all incoming/website.zip --new_url=https://target.example.test/new-site/ --skip-uploads --run-dir=/srv/private/rrze-migrations
+```
+
+With `--skip-uploads`, packaged media remain subject to all archive, checksum and temporary-storage checks, but are not copied to the destination or verified there. The general site URL replacement still runs; the standard upload site-ID path replacement is skipped. Transfer media separately (for example with `rsync`), configure the actual destination location, adjust media paths/URLs and verify the files yourself. The importer does not resolve or inspect custom upload locations. Existing sites, tables, memberships and leftovers/links in the standard upload location still block migration. The plan reports `uploads.skipped: true`, `uploads.transfer: false`, `uploads.verified: false` and null upload destination/storage. The journal, status and completion message retain the manual-transfer requirement; the media checkpoint is `skipped`.
 
 ### Import
 
 Run from the destination WordPress directory. Use the global `--url` to select the destination network context when needed.
 
 ```sh
-wp rrze-migration import all website.zip --new_url=https://target.example.test/new-site/ --uid_fields=_fixture_user --run-dir=/srv/private/rrze-migrations
+wp rrze-migration import all incoming/website.zip --new_url=https://target.example.test/new-site/ --uid_fields=_fixture_user --run-dir=/srv/private/rrze-migrations
 ```
 
 User matching uses the exact SSO `user_login`; the company email must agree. Conflicting logins/emails, duplicate CSV identities and unknown destination roles stop the import before a new site is created. New WordPress users receive a fresh random local password; this does not provision an SSO account. Existing global user profiles, passwords and memberships on other sites are preserved. Only the new site's membership is added.
 
 User CSV exports exclude passwords, reset keys, application passwords, sessions and global permission fields, including attempts to add these through export filters. Legacy credential fields inside a supported versioned package are discarded on import. New users receive the supported standard profile fields; arbitrary custom user metadata and former import hooks are not replayed.
 
-Actual imports require a private persistent `--run-dir` outside web roots, or `RRZE_MIGRATION_RUN_DIR` in the destination configuration. Each run retains its validated input package and an atomic checkpoint journal without credentials. Dry-runs require no journal directory. See [Run status and recovery](docs/migration-recovery.md) (German) for setup, interruption handling and retention.
+Actual imports require a private persistent `--run-dir` outside web roots, or `RRZE_MIGRATION_RUN_DIR` in the destination configuration. Each run retains its validated input package and an atomic checkpoint journal without credentials. Dry-runs create no journal directory; relative input paths still require the private root to locate the package. See [Run status and recovery](docs/migration-recovery.md) (German) for setup, interruption handling and retention.
 
 ```sh
 wp rrze-migration status RUN_ID --run-dir=/srv/private/rrze-migrations --format=json
 ```
 
-Imports sharing the database and base prefix run one at a time, including imports to different destination URLs. Each created site is tagged with its run ID and ownership is checked between steps. Before success, the importer verifies destination tables, URLs, user mappings, existing participant profiles and packaged media. A running step without a completion checkpoint may have partially or fully executed; individual steps are never replayed automatically.
+Imports sharing the database and base prefix run one at a time, including imports to different destination URLs. Each created site is tagged with its run ID and ownership is checked between steps. Before success, the importer verifies destination tables, URLs, user mappings, existing participant profiles and automatically transferred media. A running step without a completion checkpoint may have partially or fully executed; individual steps are never replayed automatically.
 
 Database export/import and URL replacement run in child processes. A failed command stops the migration with a nonzero status. A partially created site is retained for inspection and must be deleted manually before a retry. The import never removes sites or global users automatically.
 

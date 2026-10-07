@@ -21,7 +21,9 @@ class Export extends Command
      * ## OPTIONS
      *
      * [<outputfile>]
-     * : Output filename.
+     * : ZIP filename without a directory; each export gets a new private subdirectory.
+     * [--run-dir=<directory>]
+     * : Private migration storage outside web roots; or set RRZE_MIGRATION_RUN_DIR.
      * [--tables=<tables>]
      * : Explicit site-owned tables; a complete package must include the core tables.
      * [--custom-tables=<tables>]
@@ -52,10 +54,8 @@ class Export extends Command
             if (array_diff($wpdb->tables('blog'), $tables)) {
                 throw new RuntimeException('A complete migration package must contain every core table of the source site.');
             }
-            $output = $this->output_path($args[0] ?? 'rrze-migration-' . sanitize_title(get_bloginfo('name')) . '.zip');
-            if (file_exists($output) || is_link($output)) {
-                throw new RuntimeException('The output file already exists. Choose a new filename.');
-            }
+            $root = PackageStorage::root($assoc_args);
+            $output = PackageStorage::exportPath($root, $args[0] ?? 'rrze-migration-' . sanitize_title(get_bloginfo('name')) . '.zip', get_current_blog_id());
             $uploads = null;
             $excluded = [];
             if (isset($assoc_args['uploads'])) {
@@ -72,7 +72,8 @@ class Export extends Command
             ])) {
                 throw new RuntimeException('Export cancelled. No output file was created.');
             }
-            fclose(Files::output($output));
+            PackageStorage::root(['run-dir' => $root], true);
+            PackageStorage::reserveExport($output);
             $reserved = true;
             foreach ($excluded as $directory) {
                 WP_CLI::log('Excluded upload directory (source unchanged): ' . Terminal::safe($directory));
@@ -92,6 +93,9 @@ class Export extends Command
                 $files['wp-content/uploads'] = $uploads['basedir'];
             }
             Package::write($output, $files, $meta, $workspace);
+            if (!chmod($output, 0600)) {
+                throw new RuntimeException('Cannot secure the exported package permissions.');
+            }
         } catch (\Throwable $failure) {
             $error = $failure->getMessage();
         } finally {
@@ -102,14 +106,16 @@ class Export extends Command
                     $error = ($error ? $error . ' ' : '') . 'Could not clean up the private migration workspace: ' . $workspace;
                 }
             }
-            if ($error !== null && $reserved && !unlink($output)) {
-                $error .= ' Could not remove the incomplete output file.';
+            if ($error !== null && $reserved) {
+                if (!unlink($output) || !rmdir(dirname($output))) {
+                    $error .= ' Could not remove the incomplete private export.';
+                }
             }
         }
         if ($error !== null) {
             WP_CLI::error($error);
         }
-        WP_CLI::success('A zip file named ' . $output . ' has been created');
+        WP_CLI::success('Private migration package created: ' . Terminal::safe($output));
     }
 
     /**

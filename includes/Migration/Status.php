@@ -38,6 +38,11 @@ final class Status extends Command
                 'Restoring a site deleted before migration requires its independent backup; this run cannot undo that deletion.',
             ];
             $state['preserved_package'] = $root . '/' . $state['run_id'] . '/package.zip';
+            if (!empty($state['uploads']['skipped'])) {
+                $state['media_notice'] = Preflight::MANUAL_UPLOADS_NOTICE;
+            } elseif (isset($state['uploads']) && !$state['uploads']['included']) {
+                $state['media_notice'] = 'Media were absent from the package. A separate media transfer is not verified.';
+            }
             if (!$state['active']) {
                 $file = $state['preserved_package'];
                 $state['package_intact'] = !is_link($file) && is_file($file)
@@ -48,6 +53,9 @@ final class Status extends Command
             } else {
                 WP_CLI::log('Run: ' . $state['run_id'] . ' — ' . $state['observed_status']);
                 WP_CLI::log('Last checkpoint: ' . ($state['step'] ?? 'not started') . '; site ID: ' . ($state['site_id'] ?? 'not recorded'));
+                if (isset($state['media_notice'])) {
+                    WP_CLI::warning($state['media_notice']);
+                }
                 if (isset($state['failure_step'])) {
                     WP_CLI::log('Failed step: ' . $state['failure_step']);
                 }
