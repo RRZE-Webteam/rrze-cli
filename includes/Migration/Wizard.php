@@ -113,9 +113,7 @@ final class Wizard extends Command
         }
         $terminal->line('Existing destinations must be deleted manually in Network Admin. The wizard never deletes or overwrites a website.');
         $options = ['run-dir' => $this->storage($terminal)];
-        $file = $terminal->ask('ZIP package (relative to the private migration directory, or absolute)', '', static function ($value) use ($options): void {
-            PackageStorage::input($value, $options);
-        });
+        $file = $this->package($terminal, $options);
         $url = $terminal->ask('New destination URL (including the website path)', '', static function ($value): void {
             if (!preg_match('~^https?://~i', $value)) {
                 throw new RuntimeException('Enter the complete destination URL starting with http:// or https://.');
@@ -148,6 +146,39 @@ final class Wizard extends Command
             }
             return $terminal->identity('New destination', $plan['destination']) && $terminal->confirm('Create the new website and execute this plan now');
         }, $withoutUploads))->all([$file], $options);
+    }
+
+    private function package(Terminal $terminal, array $options): string
+    {
+        $listing = PackageStorage::packages($options);
+        $choices = [];
+        if ($listing['files']) {
+            $terminal->line('Available ZIP packages (newest modification first; contents checked after selection):');
+            foreach ($listing['files'] as $index => $file) {
+                $number = $index + 1;
+                $choices[$number] = $file['path'];
+                $terminal->line(sprintf('  [%d] %s | %s UTC | %.1f MiB', $number, $file['path'], gmdate('Y-m-d H:i:s', $file['modified']), $file['bytes'] / 1048576));
+            }
+        } else {
+            $terminal->line('No ZIP packages found in the searched directories. Enter a private ZIP path manually.');
+        }
+        if ($listing['incomplete']) {
+            $terminal->line('The list is incomplete (up to 50 ZIPs, 5000 entries, 3 subdirectory levels). You can enter an unlisted path manually.');
+        }
+        $terminal->line('Enter a list number or a relative/absolute path. No package is selected by default.');
+        $selected = '';
+        $terminal->ask('ZIP package (relative to the private migration directory, absolute, or list number)', '', static function ($value) use ($choices, $options, &$selected): void {
+            if (preg_match('/^[0-9]+$/D', $value)) {
+                if (!isset($choices[$value])) {
+                    throw new RuntimeException('Choose a displayed package number or enter a private ZIP path.');
+                }
+                $value = $choices[$value];
+            }
+            // Recheck the chosen path; files may disappear or be replaced while the prompt is open.
+            $selected = PackageStorage::input($value, $options);
+        });
+        $terminal->line('Selected ZIP: ' . $selected);
+        return $selected;
     }
 
     private function storage(Terminal $terminal): string

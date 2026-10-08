@@ -738,6 +738,122 @@ PHPHOOK);
         $this->assertWorkspaceClean();
     }
 
+    public function testWizardPackageNumberRetriesInvalidChoicesAndPreviewsTheDisplayedPath(): void
+    {
+        $package = self::$sandbox->exportPackage();
+        $root = self::$sandbox->root . '/zip-selection';
+        mkdir($root . '/export-one', 0700, true);
+        mkdir($root . '/incoming', 0700);
+        foreach (['export-one', 'incoming'] as $index => $directory) {
+            copy($package, $root . '/' . $directory . '/site.zip');
+            touch($root . '/' . $directory . '/site.zip', 1700000000 + $index);
+        }
+        $before = self::$sandbox->fixture('target', 'state');
+        $uploads = $this->uploadsSnapshot();
+        $runs = glob(self::$sandbox->root . '/runs-target/*');
+        $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], [
+            ['Private migration directory', $root],
+            ['ZIP package (relative', ''],
+            ['ZIP package (relative', '0'],
+            ['ZIP package (relative', '999999999999999999999999'],
+            ['ZIP package (relative', '2'],
+            ['New destination URL', 'http://target.test/number-preview/'],
+            ['Post meta keys', '_fixture_user'],
+            ['Next action', ''],
+        ]);
+        self::assertSame(0, $result['code'], $result['stdout']);
+        self::assertSame(8, $result['answers']);
+        self::assertStringContainsString('[1] incoming/site.zip', $result['stdout']);
+        self::assertStringContainsString('[2] export-one/site.zip', $result['stdout']);
+        self::assertStringContainsString('No package is selected by default', $result['stdout']);
+        self::assertStringContainsString('Choose a displayed package number', $result['stdout']);
+        self::assertStringContainsString('Selected ZIP: ' . $root . '/export-one/site.zip', $result['stdout']);
+        self::assertStringContainsString('Dry-run complete', $result['stdout']);
+        self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        self::assertSame($uploads, $this->uploadsSnapshot());
+        self::assertSame($runs, glob(self::$sandbox->root . '/runs-target/*'));
+        self::assertSame(['export-one', 'incoming'], array_values(array_diff(scandir($root), ['.', '..'])));
+        self::assertSame(hash_file('sha256', $package), hash_file('sha256', $root . '/export-one/site.zip'));
+        $this->assertWorkspaceClean();
+    }
+
+    public function testWizardEmptyListAllowsAnAbsolutePrivatePackageWithoutCreatingStorage(): void
+    {
+        $package = self::$sandbox->exportPackage();
+        $before = self::$sandbox->fixture('target', 'state');
+        $root = self::$sandbox->root . '/empty-selection';
+        mkdir($root, 0700);
+        foreach ([$root, $root . '/missing'] as $storage) {
+            $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], [
+                ['Private migration directory', $storage], ['ZIP package (relative', $package],
+                ['New destination URL', 'http://target.test/empty-preview/'],
+                ['Post meta keys', ''], ['Next action', ''],
+            ]);
+            self::assertSame(0, $result['code'], $result['stdout']);
+            self::assertSame(5, $result['answers']);
+            self::assertStringContainsString('No ZIP packages found', $result['stdout']);
+            self::assertStringContainsString('Selected ZIP: ' . $package, $result['stdout']);
+            self::assertStringContainsString('Dry-run complete', $result['stdout']);
+        }
+        self::assertSame([], glob($root . '/*'));
+        self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        $this->assertWorkspaceClean();
+    }
+
+    public function testWizardPackageSelectionRechecksPathsAndCancellationCreatesNoRun(): void
+    {
+        $package = self::$sandbox->exportPackage();
+        $root = self::$sandbox->root . '/selection-recheck';
+        mkdir($root, 0700);
+        $before = self::$sandbox->fixture('target', 'state');
+        $runs = glob(self::$sandbox->root . '/runs-target/*');
+        foreach (['deleted', 'symlink', 'quit', 'eof', 'corrupt'] as $mode) {
+            $file = $root . '/site.zip';
+            copy($package, $file);
+            $dialogue = [
+                ['Private migration directory', $root],
+                ['ZIP package (relative', static function () use ($mode, $file) {
+                    if ($mode === 'quit' || $mode === 'eof') {
+                        return $mode === 'quit' ? '!quit' : "\x04";
+                    }
+                    unlink($file);
+                    if ($mode === 'symlink') {
+                        symlink(self::$sandbox->root . '/target/wp-config.php', $file);
+                    } elseif ($mode === 'corrupt') {
+                        file_put_contents($file, 'invalid ZIP contents');
+                    }
+                    return '1';
+                }],
+            ];
+            if (in_array($mode, ['deleted', 'symlink'], true)) {
+                $dialogue[] = ['ZIP package (relative', '!quit'];
+            } elseif ($mode === 'corrupt') {
+                $dialogue[] = ['New destination URL', 'http://target.test/selected-corrupt/'];
+                $dialogue[] = ['Post meta keys', ''];
+                $dialogue[] = ['Next action', ''];
+            }
+            try {
+                $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
+                self::assertNotSame(0, $result['code'], $result['stdout']);
+                self::assertSame(count($dialogue), $result['answers']);
+                self::assertStringContainsString('[1] site.zip', $result['stdout']);
+                self::assertStringNotContainsString('Dry-run complete', $result['stdout']);
+                self::assertStringNotContainsString('Type that complete URL', $result['stdout']);
+                if (in_array($mode, ['deleted', 'symlink'], true)) {
+                    self::assertStringContainsString('readable local ZIP', $result['stdout']);
+                }
+            } finally {
+                if (file_exists($file) || is_link($file)) {
+                    unlink($file);
+                }
+            }
+        }
+        self::assertSame([], glob($root . '/*'));
+        self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        self::assertSame($runs, glob(self::$sandbox->root . '/runs-target/*'));
+        $this->assertWorkspaceClean();
+    }
+
     public function testWizardExportCancellationCreatesNoOutput(): void
     {
         $before = self::$sandbox->fixture('source', 'state');
@@ -789,19 +905,25 @@ PHPHOOK);
 
     public function testWizardImportUsesReviewedPackageDespiteOriginalFileChanging(): void
     {
-        self::$sandbox->exportPackage();
+        $package = self::$sandbox->exportPackage();
+        $root = self::$sandbox->root . '/selected-import';
+        mkdir($root, 0700);
+        copy($package, $root . '/fixture.zip');
         $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
         $url = 'http://target.test/wizard-imported/';
-        $dialogue = $this->wizardImportDialogue('fixture.zip', $url);
+        $dialogue = $this->wizardImportDialogue('1', $url);
+        $dialogue[0][1] = $root;
         $dialogue[] = ['Type that complete URL', $url];
-        $dialogue[] = ['Create the new website and execute this plan now', static function () {
-            file_put_contents(self::$sandbox->root . '/runs-target/fixture.zip', 'changed after review');
+        $dialogue[] = ['Create the new website and execute this plan now', static function () use ($root) {
+            file_put_contents($root . '/fixture.zip', 'changed after review');
             return 'yes';
         }];
         try {
             $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
             self::assertSame(0, $result['code'], $result['stdout']);
-            $state = $this->runStatus($this->runId($result));
+            self::assertStringContainsString('[1] fixture.zip', $result['stdout']);
+            self::assertStringContainsString('Selected ZIP: ' . $root . '/fixture.zip', $result['stdout']);
+            $state = $this->runStatus($this->runId($result), $root);
             self::assertSame('completed', $state['observed_status']);
             self::assertTrue($state['package_intact']);
             $content = self::$sandbox->fixture('target', 'content', [(string) $state['site_id']]);
@@ -1405,9 +1527,10 @@ PHPHOOK);
         return $match[1];
     }
 
-    private function runStatus(string $id): array
+    private function runStatus(string $id, ?string $root = null): array
     {
-        return json_decode(self::$sandbox->wp('target', ['rrze-migration', 'status', $id, '--format=json']), true, 64, JSON_THROW_ON_ERROR);
+        $options = $root === null ? [] : ['--run-dir=' . $root];
+        return json_decode(self::$sandbox->wp('target', ['rrze-migration', 'status', $id, '--format=json', ...$options]), true, 64, JSON_THROW_ON_ERROR);
     }
 
     private function pauseHook(string $step): array

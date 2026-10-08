@@ -59,6 +59,76 @@ final class PackageStorageTest extends TestCase
         self::assertSame('private input', file_get_contents($file));
     }
 
+    public function testDiscoveryListsDistinctRelativePathsNewestFirstWithoutOpeningArchives(): void
+    {
+        $paths = ['export-one/site.zip', 'incoming/site.zip', 'run-id/package.ZIP', 'older.zip'];
+        foreach ($paths as $index => $path) {
+            if (!is_dir(dirname($this->root . '/' . $path))) {
+                mkdir(dirname($this->root . '/' . $path), 0700);
+            }
+            file_put_contents($this->root . '/' . $path, 'not yet a validated package');
+            touch($this->root . '/' . $path, 1700000000 - ($index === 3 ? 100 : 0));
+        }
+        file_put_contents($this->root . '/run-id/run.json', '{}');
+        $listing = PackageStorage::packages(['run-dir' => $this->root]);
+        self::assertSame($paths, array_column($listing['files'], 'path'));
+        self::assertFalse($listing['incomplete']);
+        self::assertSame(1700000000, $listing['files'][0]['modified']);
+        self::assertSame(27, $listing['files'][0]['bytes']);
+        self::assertSame('not yet a validated package', file_get_contents($this->root . '/older.zip'));
+    }
+
+    public function testDiscoveryOmitsSymlinksAndUnsafeNames(): void
+    {
+        mkdir($this->root . '/incoming', 0700);
+        file_put_contents($this->root . '/incoming/site.zip', 'ZIP');
+        symlink($this->root . '/incoming/site.zip', $this->root . '/link.zip');
+        symlink($this->root, $this->root . '/incoming/loop');
+        symlink(ABSPATH, $this->root . '/webroot');
+        file_put_contents($this->root . "/spoof\033[2J.zip", 'ZIP');
+        file_put_contents($this->root . "/spoof\u{202E}.zip", 'ZIP');
+        file_put_contents($this->root . '/back\\slash.zip', 'ZIP');
+        $listing = PackageStorage::packages(['run-dir' => $this->root]);
+        self::assertSame(['incoming/site.zip'], array_column($listing['files'], 'path'));
+        self::assertFalse($listing['incomplete']);
+    }
+
+    public function testEmptyAndMissingDirectoriesNeedNoFilesystemChanges(): void
+    {
+        foreach ([$this->root, $this->root . '/missing'] as $root) {
+            self::assertSame(['files' => [], 'incomplete' => false], PackageStorage::packages(['run-dir' => $root]));
+        }
+        self::assertSame([], glob($this->root . '/*'));
+    }
+
+    public function testDiscoveryLimitsDisplayAndDepthButUnlistedInputsRemainUsable(): void
+    {
+        for ($index = 0; $index < 51; $index++) {
+            file_put_contents($this->root . '/file-' . $index . '.zip', 'ZIP');
+            touch($this->root . '/file-' . $index . '.zip', 1700000000 + $index);
+        }
+        mkdir($this->root . '/one/two/three/four', 0700, true);
+        file_put_contents($this->root . '/one/two/three/four/deep.zip', 'ZIP');
+        file_put_contents($this->root . '/one/two/three/visible.zip', 'ZIP');
+        $listing = PackageStorage::packages(['run-dir' => $this->root]);
+        $paths = array_column($listing['files'], 'path');
+        self::assertCount(50, $paths);
+        self::assertTrue($listing['incomplete']);
+        self::assertContains('one/two/three/visible.zip', $paths);
+        self::assertNotContains('one/two/three/four/deep.zip', $paths);
+        self::assertNotContains('file-0.zip', $paths);
+        self::assertSame($this->root . '/file-0.zip', PackageStorage::input('file-0.zip', ['run-dir' => $this->root]));
+        self::assertSame($this->root . '/one/two/three/four/deep.zip', PackageStorage::input('one/two/three/four/deep.zip', ['run-dir' => $this->root]));
+    }
+
+    public function testDiscoveryStopsScanningLargeUnrelatedDirectoryTrees(): void
+    {
+        for ($index = 0; $index < 5001; $index++) {
+            file_put_contents($this->root . '/entry-' . $index . '.txt', '');
+        }
+        self::assertSame(['files' => [], 'incomplete' => true], PackageStorage::packages(['run-dir' => $this->root]));
+    }
+
     public function testInputCannotUseTheWordPressWebRoot(): void
     {
         $this->expectExceptionMessage('inside WordPress or wp-content');
@@ -79,6 +149,26 @@ final class PackageStorageTest extends TestCase
         symlink($this->root, $this->root . '/storage/link');
         $this->expectExceptionMessage('escapes the private migration directory');
         PackageStorage::input('link/outside.zip', ['run-dir' => $this->root . '/storage']);
+    }
+
+    public function testSelectionRejectsADirectoryReplacedByAnExternalProcessAfterDiscovery(): void
+    {
+        mkdir($this->root . '/storage/incoming', 0700, true);
+        mkdir($this->root . '/outside', 0700);
+        file_put_contents($this->root . '/storage/incoming/site.zip', 'original');
+        file_put_contents($this->root . '/outside/site.zip', 'outside storage');
+        self::assertCount(1, PackageStorage::packages(['run-dir' => $this->root . '/storage'])['files']);
+        // Another process must perform the replacement so this process retains its realpath cache.
+        $process = proc_open([PHP_BINARY, '-r',
+            'rename($argv[1] . "/storage/incoming", $argv[1] . "/storage/original"); symlink($argv[1] . "/outside", $argv[1] . "/storage/incoming");',
+            $this->root,
+        ], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        foreach ($pipes as $pipe) {
+            fclose($pipe);
+        }
+        self::assertSame(0, proc_close($process));
+        $this->expectExceptionMessage('escapes the private migration directory');
+        PackageStorage::input('incoming/site.zip', ['run-dir' => $this->root . '/storage']);
     }
 
     public function testPlanningAMissingRootDoesNotCreateItButStatusStillRejectsIt(): void
