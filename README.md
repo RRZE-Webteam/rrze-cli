@@ -47,6 +47,14 @@ Run from the source WordPress directory:
 wp rrze-migration export all website.zip --url=https://source.example.test/site/ --uploads
 ```
 
+On Multisite, `--site-id` can select the source instead of `--url`:
+
+```sh
+wp rrze-migration export all website.zip --site-id=5 --uploads
+```
+
+The ID must identify an existing website in this installation. It takes precedence over the initial `--url` context. If needed, the command starts a fresh WP-CLI process for that site's registered address so its plugins, user roles and upload settings load correctly, and verifies the loaded site ID before export. Invalid IDs and incorrect routing stop the export. The direct `export all` command remains suitable for scripts and does not prompt; use the wizard for source confirmation. The low-level `export tables` and `export users` commands continue to use `--url`.
+
 The output argument is a filename without a directory; `.zip` is appended if missing. Every export gets its own private subdirectory, so repeated filenames keep earlier exports intact. The wizard displays the full destination before approval, and the command prints it after success. Cancellation creates no export directory; handled failures remove the incomplete export. Temporary JSON, CSV and SQL files are stored in a private directory and removed after success or a handled failure.
 
 Uploads containing server configuration or executable files, such as `.htaccess` or `index.php`, block export and the error names the offending path. To omit a plugin's backup or temporary directory deliberately, use an explicit directory exclusion:
@@ -71,16 +79,17 @@ Run the wizard from the relevant WordPress directory in an interactive terminal:
 
 ```sh
 wp rrze-migration wizard export --url=https://source.example.test/site/
+wp rrze-migration wizard export --site-id=5
 wp rrze-migration wizard import
 ```
 
-Both wizard operations first ask for the private migration directory, using `RRZE_MIGRATION_RUN_DIR` as the default. The export wizard shows the selected source and tables, includes uploads by default, and requires the source URL plus explicit confirmation before creating a new archive. The import wizard asks for the package, new destination URL and numeric user-reference fields. Its default action is a read-only preview. To execute, choose `import`, review the plan, type the complete normalized destination URL and answer `yes` to the final confirmation. Empty confirmation means cancellation; `!quit`, end of input and supported cancellation signals also stop the wizard.
+The export wizard first asks for the source website ID on Multisite, defaulting to the current website; `--site-id` supplies this answer directly. It then displays `ID X | URL: …` for the selected website and asks `Export this website (yes/no) [no]`. Only `yes` proceeds to the private migration directory and package options. It shows the selected tables, includes uploads by default, and still requires the source URL plus final confirmation before creating an archive. Single-site exports confirm the current website without an ID selection. Both operations use `RRZE_MIGRATION_RUN_DIR` as the default private directory. The import wizard asks for the package, new destination URL and numeric user-reference fields. Its default action is a read-only preview. To execute, choose `import`, review the plan, type the complete normalized destination URL and answer `yes` to the final confirmation. Empty confirmation means cancellation; `!quit`, end of input and supported cancellation signals also stop the wizard.
 
 For import, available ZIPs appear in a numbered list with their relative paths, filesystem modification times (UTC) and sizes. Enter a number or type a private relative/absolute path directly; no package is selected by default. Discovery includes export directories, incoming packages and retained import copies, without following symbolic links. It displays up to 50 files, newest modification first, and searches at most 5000 entries through three subdirectory levels. An incomplete list is marked; manual paths remain available. Listing a file does not validate its contents or indicate that a previous import succeeded. The selected path and package still undergo the normal checks. This uses the existing terminal implementation without another prompt dependency.
 
 The wizard uses the same export/import implementation and preflight as the direct commands. Import approval applies to the preserved package copy and the displayed plan. A changed site allocation, table mapping or user action during review stops execution before site creation. Cancelled imports can retain a private journal and package with status `failed`, no site ID and a completed cleanup checkpoint. Use the existing status command to inspect them.
 
-Piped input/output, `--yes` and `--quiet` are rejected. Scripts continue to use `export all`, `import all --dry-run --format=json` and `import all` with explicit arguments. See [Wizard usage](docs/migration-wizard.md) (German) for the guided workflow and cancellation behavior.
+Piped input/output, `--yes` and `--quiet` are rejected. The wizard accepts `--site-id` only for export. Scripts continue to use `export all`, `import all --dry-run --format=json` and `import all` with explicit arguments. See [Wizard usage](docs/migration-wizard.md) (German) for the guided workflow and cancellation behavior.
 
 When uploads are enabled, the export wizard also asks for optional directory exclusions and lists them before confirmation. The import wizard displays recorded exclusions and requires separate consent before importing such a package.
 

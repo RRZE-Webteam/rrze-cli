@@ -10,19 +10,27 @@ Den Befehl im Hauptverzeichnis der betreffenden WordPress-Installation in einem 
 wp rrze-migration wizard
 ```
 
-Ohne Unterauswahl fragt der Assistent nach `import` oder `export`. Am Anfang zeigt er das WordPress-Verzeichnis, die aktuelle Website mit ID und bei Multisite das aktuelle Netzwerk. Die globalen WP-CLI-Parameter, insbesondere `--url`, wählen diesen Kontext vor dem Start. Der Assistent wechselt nicht zwischen Servern und überträgt kein Paket auf einen anderen Rechner.
+Ohne Unterauswahl fragt der Assistent nach `import` oder `export`. Am Anfang zeigt er das WordPress-Verzeichnis, die aktuelle Website mit ID und bei Multisite das aktuelle Netzwerk. Die globalen WP-CLI-Parameter, insbesondere `--url`, wählen diesen anfänglichen Kontext. Für den Export kann anschließend eine Website-ID derselben Multisite-Installation ausgewählt werden. Der Assistent wechselt nicht zwischen Servern und überträgt kein Paket auf einen anderen Rechner.
 
 Die Fragen sind wie die übrigen Migrationsausgaben auf Englisch. Vorgaben direkt hinter einer Eingabefrage stehen in eckigen Klammern und gelten für Enter. `!quit` bricht an jeder Eingabe ab. ZIP-Importpfade beziehen sich auf das private Migrationsverzeichnis oder werden absolut außerhalb der Webverzeichnisse angegeben. Exportnamen enthalten ausschließlich den Dateinamen ohne Verzeichnis. Leerzeichen in Dateinamen werden ohne Shell-Auswertung verarbeitet; bei der interaktiven Eingabe keine zusätzlichen Anführungszeichen setzen.
 
-Beide Abläufe fragen zuerst nach `Private migration directory outside web roots`. Eine konfigurierte `RRZE_MIGRATION_RUN_DIR` dient als Vorgabe. Der Pfad muss absolut und privat sein und außerhalb von WordPress und `wp-content` liegen; andere Webserver dürfen ihn ebenfalls nicht veröffentlichen. Das Elternverzeichnis muss bereits existieren. Die Pfadprüfung und eine Vorschau legen dort noch keine Verzeichnisse an. Bei einem bestätigten Export oder einem vorbereiteten echten Import wird ein fehlendes Stammverzeichnis mit Modus `0700` angelegt.
+Beide Abläufe fragen nach `Private migration directory outside web roots`; beim Export erfolgt vorher die Auswahl und Bestätigung der Quelle. Eine konfigurierte `RRZE_MIGRATION_RUN_DIR` dient als Vorgabe. Der Pfad muss absolut und privat sein und außerhalb von WordPress und `wp-content` liegen; andere Webserver dürfen ihn ebenfalls nicht veröffentlichen. Das Elternverzeichnis muss bereits existieren. Die Pfadprüfung und eine Vorschau legen dort noch keine Verzeichnisse an. Bei einem bestätigten Export oder einem vorbereiteten echten Import wird ein fehlendes Stammverzeichnis mit Modus `0700` angelegt.
 
 ## Exportieren
+
+```sh
+wp rrze-migration wizard export --site-id=5
+```
+
+Ohne `--site-id` fragt der Assistent auf Multisite nach `Source website ID`; die aktuelle Website-ID ist die Vorgabe. Der bisherige URL-Aufruf bleibt möglich und bestimmt diese Vorgabe:
 
 ```sh
 wp rrze-migration wizard export --url=https://source.example.test/site/
 ```
 
-1. Prüfen, dass die angezeigte Website tatsächlich die Quelle ist. Bei einem falschen Kontext abbrechen und mit dem richtigen `--url` neu starten.
+Die ID muss eine positive ganze Zahl sein und zu einer vorhandenen Website gehören. Bei einer anderen Website wird WordPress in einem neuen WP-CLI-Prozess mit deren registrierter Adresse geladen, damit auch ihre Plugins, Rollen und Upload-Einstellungen aktiv sind. Erst nach Prüfung der geladenen ID folgt die Bestätigung. Eine falsche Zuordnung führt zum Abbruch. Wird zusätzlich `--url` angegeben, entscheidet die ausdrücklich ausgewählte ID über die Exportquelle. Bei einer Einzelinstallation wird die aktuelle Website bestätigt; `--site-id` ist dort nicht verfügbar.
+
+1. Die angezeigte Zuordnung `Export source: ID 5 | URL: …` prüfen und `Export this website (yes/no) [no]` mit `yes` beantworten. Enter, `no`, `!quit` oder Eingabeende brechen vor der Anlage von Exportdateien ab. Bei einer falschen Quelle abbrechen und mit der richtigen ID neu starten.
 2. Das private Migrationsverzeichnis bestätigen und einen ZIP-Dateinamen ohne Pfad wählen. Eine fehlende Endung `.zip` wird ergänzt. Jeder Export erhält einen eigenen Ordner `export-<UTC-Zeitstempel>-site-<ID>-<Zufallskennung>`; derselbe Dateiname überschreibt deshalb keinen älteren Export.
 3. Bei Bedarf zusätzliche, ausschließlich dieser Website gehörende Tabellen angeben. Die automatische Auswahl entspricht `export all`; bei Hauptsites sind zusätzliche eigene Tabellen ausdrücklich zu benennen und fachlich zu prüfen.
 4. Die Medienauswahl prüfen. Uploads sind vorausgewählt. Plugins und Themes werden separat im Ziel bereitgestellt.
@@ -97,11 +105,12 @@ Die Hinweise zu harten Prozessabbrüchen, noch laufenden Kindprozessen und manue
 
 ## Automatisierte Aufrufe
 
-Der Wizard verlangt interaktive Ein- und Ausgabe und akzeptiert keine automatische Zustimmung mit `--yes`, keine unterdrückte Ausgabe mit `--quiet` und keine zusätzlichen Migrationsoptionen. Für Skripte bleiben die expliziten Befehle verfügbar. Das erste Beispiel setzt eine konfigurierte `RRZE_MIGRATION_RUN_DIR` voraus:
+Der Wizard verlangt interaktive Ein- und Ausgabe und akzeptiert keine automatische Zustimmung mit `--yes` oder unterdrückte Ausgabe mit `--quiet`. Die einzige Migrationsoption ist `--site-id` für den Export; beim Import ist sie unzulässig. Für Skripte bleiben die expliziten Befehle verfügbar. Diese Beispiele setzen eine konfigurierte `RRZE_MIGRATION_RUN_DIR` voraus:
 
 ```sh
+wp rrze-migration export all website.zip --site-id=5 --uploads
 wp rrze-migration import all incoming/website.zip --new_url=https://target.example.test/site/ --dry-run --format=json
 wp rrze-migration import all incoming/website.zip --new_url=https://target.example.test/site/ --run-dir=/srv/private/rrze-migrations
 ```
 
-Diese Befehle fragen nicht nach einer interaktiven Freigabe. Für eine ausdrücklich gewünschte manuelle Medienübertragung `--skip-uploads` sowohl zur Vorschau als auch zum Import hinzufügen. Ohne diese Option bleibt die Upload-Einschränkung im direkten Befehl ein Fehler. Paket-, Website-, Tabellen- und Benutzerprüfungen gelten unverändert. Die Oberfläche benötigt keine zusätzliche Prompt-Bibliothek; Ein- und Ausgabe erfolgen über die vorhandene PHP-/WP-CLI-Laufzeit.
+Diese Befehle fragen nicht nach einer interaktiven Freigabe. `export all` unterstützt dieselbe ID-Auflösung und Kontextprüfung; die Rohbefehle `export tables` und `export users` werden weiterhin über `--url` gesteuert. Für eine ausdrücklich gewünschte manuelle Medienübertragung `--skip-uploads` sowohl zur Vorschau als auch zum Import hinzufügen. Ohne diese Option bleibt die Upload-Einschränkung im direkten Befehl ein Fehler. Paket-, Website-, Tabellen- und Benutzerprüfungen gelten unverändert. Die Oberfläche benötigt keine zusätzliche Prompt-Bibliothek; Ein- und Ausgabe erfolgen über die vorhandene PHP-/WP-CLI-Laufzeit.

@@ -700,6 +700,154 @@ PHPHOOK);
         $this->assertWorkspaceClean();
     }
 
+    public function testExportBySiteIdUsesTheSelectedTablesUsersUploadsAndPluginContext(): void
+    {
+        $url = trim(self::$sandbox->wp('source', ['option', 'get', 'home', '--url=http://source.test/source/']));
+        $hook = self::$sandbox->root . '/source/wp-content/mu-plugins/source-context.php';
+        file_put_contents($hook, <<<'PHPHOOK'
+<?php
+// Registered only when WordPress boots the requested site, not on switch_to_blog().
+if (get_current_blog_id() === 2) {
+    add_filter('rrze_migration_export_user_headers', static fn ($headers) => [...$headers, 'fixture_boot_site']);
+    add_filter('rrze_migration_export_user_data', static fn ($data) => $data + ['fixture_boot_site' => 'booted-site-2']);
+}
+PHPHOOK);
+        $before = self::$sandbox->fixture('source', 'state');
+        try {
+            foreach (['direct', 'wizard-option', 'wizard-question'] as $mode) {
+                $filename = 'id-' . $mode . '.zip';
+                if ($mode === 'direct') {
+                    $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', $filename, '--site-id=2', '--uploads']);
+                } else {
+                    $arguments = ['rrze-migration', 'wizard', 'export'];
+                    $dialogue = [];
+                    if ($mode === 'wizard-option') {
+                        $arguments[] = '--site-id=2';
+                    } else {
+                        $dialogue = [['Source website ID', '2abc'], ['Source website ID', '999999999'], ['Source website ID', '2']];
+                    }
+                    $dialogue = [...$dialogue,
+                        ['Export this website', 'yes'], ['Private migration directory', ''],
+                        ['New ZIP filename', $filename], ['Additional site-owned tables', ''], ['Include uploads', 'yes'],
+                        ['Upload subdirectories to exclude', ''], ['Type that complete URL', $url], ['Create this export package now', 'yes'],
+                    ];
+                    $result = self::$sandbox->terminal('source', $arguments, $dialogue);
+                    self::assertSame(count($dialogue), $result['answers']);
+                    self::assertStringContainsString('Export source: ID 2 | URL: ' . $url, $result['stdout']);
+                    self::assertSame(1, substr_count($result['stdout'], 'Export this website (yes/no) [no]'));
+                }
+                self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
+                $packages = glob(self::$sandbox->root . '/runs-source/export-*-site-2-*/' . $filename);
+                self::assertCount(1, $packages);
+                $zip = new ZipArchive();
+                self::assertTrue($zip->open($packages[0]));
+                $meta = json_decode($zip->getFromName('site.json'), true, 512, JSON_THROW_ON_ERROR);
+                self::assertSame(2, $meta['blog_id']);
+                self::assertSame($url, $meta['url']);
+                self::assertSame('src_2_', $meta['db_prefix']);
+                self::assertContains('src_2_rrze_fixture', $meta['tables']);
+                self::assertNotContains('src_posts', $meta['tables']);
+                self::assertNotContains('src_users', $meta['tables']);
+                $sql = $zip->getFromName('tables.sql');
+                self::assertStringContainsString('CREATE TABLE `src_2_posts`', $sql);
+                self::assertStringNotContainsString('CREATE TABLE `src_posts`', $sql);
+                $csv = $zip->getFromName('users.csv');
+                self::assertStringContainsString('sso0001', $csv);
+                self::assertStringContainsString('sso0002', $csv);
+                self::assertStringContainsString('booted-site-2', $csv);
+                self::assertStringNotContainsString('synthetic-test-password', $csv);
+                $images = array_values(array_filter(array_keys($meta['files']), static fn ($name) => str_ends_with($name, '/fixture.png')));
+                self::assertCount(1, $images);
+                self::assertNotFalse($zip->getFromName($images[0]));
+                $zip->close();
+                self::assertSame($before, self::$sandbox->fixture('source', 'state'));
+                $this->assertWorkspaceClean();
+            }
+            // An explicit ID also overrides an initial --url pointing at a different site.
+            $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', 'id-main.zip', '--site-id=1', '--url=http://source.test/source/']);
+            self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
+            $packages = glob(self::$sandbox->root . '/runs-source/export-*-site-1-*/id-main.zip');
+            self::assertCount(1, $packages);
+            $zip = new ZipArchive();
+            self::assertTrue($zip->open($packages[0]));
+            $meta = json_decode($zip->getFromName('site.json'), true, 512, JSON_THROW_ON_ERROR);
+            self::assertSame(1, $meta['blog_id']);
+            self::assertSame('src_', $meta['db_prefix']);
+            self::assertNotContains('src_2_posts', $meta['tables']);
+            self::assertStringNotContainsString('booted-site-2', $zip->getFromName('users.csv'));
+            $zip->close();
+            self::assertSame($before, self::$sandbox->fixture('source', 'state'));
+        } finally {
+            unlink($hook);
+        }
+    }
+
+    public function testExportSourceConfirmationCancellationCreatesNoOutput(): void
+    {
+        $before = self::$sandbox->fixture('source', 'state');
+        $exports = glob(self::$sandbox->root . '/runs-source/*');
+        foreach (['', 'no', '!quit', "\x04"] as $answer) {
+            $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--site-id=2'], [
+                ['Export this website', $answer],
+            ]);
+            self::assertNotSame(0, $result['code'], $result['stdout']);
+            self::assertSame(1, $result['answers']);
+            self::assertStringContainsString('Export source: ID 2 | URL: http://source.test/source', $result['stdout']);
+            self::assertStringNotContainsString('Private migration directory', $result['stdout']);
+            self::assertSame($exports, glob(self::$sandbox->root . '/runs-source/*'));
+            self::assertSame($before, self::$sandbox->fixture('source', 'state'));
+        }
+        $this->assertWorkspaceClean();
+    }
+
+    public function testInvalidExportSiteIdsAndImportSiteSelectionAreRejectedWithoutOutput(): void
+    {
+        $before = self::$sandbox->fixture('source', 'state');
+        $exports = glob(self::$sandbox->root . '/runs-source/*');
+        foreach (['0', '-2', '2abc', '2.5', '999999999'] as $id) {
+            $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', 'invalid-id.zip', '--site-id=' . $id]);
+            self::assertNotSame(0, $result['code']);
+            self::assertStringContainsString($id === '999999999' ? 'No website exists' : 'positive numeric website ID', $result['stderr']);
+            $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--site-id=' . $id], []);
+            self::assertNotSame(0, $result['code']);
+            self::assertStringNotContainsString('Export this website', $result['stdout']);
+        }
+        $result = self::$sandbox->command('single', ['rrze-migration', 'export', 'all', 'single-id.zip', '--site-id=1']);
+        self::assertNotSame(0, $result['code']);
+        self::assertStringContainsString('requires Multisite', $result['stderr']);
+        $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import', '--site-id=2'], []);
+        self::assertNotSame(0, $result['code']);
+        self::assertStringContainsString('not supported for import', $result['stdout']);
+        self::assertStringNotContainsString('Private migration directory', $result['stdout']);
+        $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', 'invalid-tables.zip', '--site-id=2', '--tables=src_users']);
+        self::assertNotSame(0, $result['code']);
+        self::assertSame($exports, glob(self::$sandbox->root . '/runs-source/*'));
+        self::assertSame($before, self::$sandbox->fixture('source', 'state'));
+        $this->assertWorkspaceClean();
+    }
+
+    public function testIncorrectBootstrapSiteCannotFallBackToExportingAnotherWebsite(): void
+    {
+        $before = self::$sandbox->fixture('source', 'state');
+        $exports = glob(self::$sandbox->root . '/runs-source/*');
+        $hook = self::$sandbox->root . '/source/wp-content/mu-plugins/wrong-context.php';
+        file_put_contents($hook, '<?php add_action("init", static function () { if (get_current_blog_id() === 2) { switch_to_blog(1); } });');
+        try {
+            $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', 'wrong-context.zip', '--site-id=2']);
+            self::assertNotSame(0, $result['code']);
+            self::assertStringContainsString('did not load the requested website ID', $result['stderr']);
+            $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--site-id=2'], []);
+            self::assertNotSame(0, $result['code']);
+            self::assertStringContainsString('did not load the requested website ID', $result['stdout']);
+            self::assertStringNotContainsString('Export this website', $result['stdout']);
+            self::assertSame($exports, glob(self::$sandbox->root . '/runs-source/*'));
+            self::assertSame($before, self::$sandbox->fixture('source', 'state'));
+            $this->assertWorkspaceClean();
+        } finally {
+            unlink($hook);
+        }
+    }
+
     public function testWizardExportsSelectedSourceWithUploadsAndProtectsExistingOutput(): void
     {
         $source = 'http://source.test/source/';
@@ -707,6 +855,7 @@ PHPHOOK);
         $before = self::$sandbox->fixture('source', 'snapshot', ['2']);
         $name = 'wizard export.zip';
         $dialogue = [
+            ['Source website ID', ''], ['Export this website', 'yes'],
             ['Private migration directory', ''],
             ['New ZIP filename', $name], ['Additional site-owned tables', ''], ['Include uploads', ''],
             ['Upload subdirectories to exclude', ''],
@@ -714,7 +863,7 @@ PHPHOOK);
         ];
         $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=' . $source], $dialogue);
         self::assertSame(0, $result['code'], $result['stdout']);
-        self::assertSame(7, $result['answers']);
+        self::assertSame(9, $result['answers']);
         $packages = glob(self::$sandbox->root . '/runs-source/export-*/' . $name);
         self::assertCount(1, $packages);
         $file = $packages[0];
@@ -861,6 +1010,7 @@ PHPHOOK);
             $file = 'cancel-' . bin2hex(random_bytes(3)) . '.zip';
             $exports = glob(self::$sandbox->root . '/runs-source/export-*');
             $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=http://source.test/source/'], [
+                ['Source website ID', ''], ['Export this website', 'yes'],
                 ['Private migration directory', ''],
                 ['New ZIP filename', $file], ['Additional site-owned tables', ''], ['Include uploads', ''],
                 ['Upload subdirectories to exclude', ''],
@@ -1424,12 +1574,13 @@ PHPHOOK);
         self::assertFileDoesNotExist(self::$sandbox->root . '/source/invalid-exclusion.zip');
         self::$sandbox->wp('source', ['rrze-migration', 'export', 'all', 'direct-excluded.zip', '--uploads', '--exclude-upload-dirs=wp-migrate-db', '--url=http://source.test/source/']);
         $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=http://source.test/source/'], [
+            ['Source website ID', ''], ['Export this website', 'yes'],
             ['Private migration directory', ''],
             ['New ZIP filename', 'excluded.zip'], ['Additional site-owned tables', ''], ['Include uploads', 'yes'],
             ['Upload subdirectories to exclude', 'wp-migrate-db'], ['Type that complete URL', $sourceUrl], ['Create this export package now', 'yes'],
         ]);
         self::assertSame(0, $result['code'], $result['stdout']);
-        self::assertSame(7, $result['answers']);
+        self::assertSame(9, $result['answers']);
         self::assertStringContainsString('Excluded upload directories: wp-migrate-db', $result['stdout']);
         $packages = glob(self::$sandbox->root . '/runs-source/export-*/excluded.zip');
         self::assertCount(1, $packages);

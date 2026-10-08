@@ -22,6 +22,8 @@ class Export extends Command
      *
      * [<outputfile>]
      * : ZIP filename without a directory; each export gets a new private subdirectory.
+     * [--site-id=<id>]
+     * : Export this Multisite website ID instead of the current --url context.
      * [--run-dir=<directory>]
      * : Private migration storage outside web roots; or set RRZE_MIGRATION_RUN_DIR.
      * [--tables=<tables>]
@@ -50,6 +52,13 @@ class Export extends Command
         $error = null;
         try {
             $this->validate_options($assoc_args);
+            if (array_key_exists('site-id', $assoc_args)) {
+                $command = ExportSource::command('rrze-migration export all', $args, $assoc_args);
+                if ($command !== null) {
+                    WP_CLI::runcommand($command);
+                    return;
+                }
+            }
             $tables = $this->select_tables($assoc_args);
             if (array_diff($wpdb->tables('blog'), $tables)) {
                 throw new RuntimeException('A complete migration package must contain every core table of the source site.');

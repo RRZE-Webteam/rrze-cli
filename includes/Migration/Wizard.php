@@ -15,10 +15,13 @@ final class Wizard extends Command
      *
      * [<operation>]
      * : import or export; asks if omitted. Requires an interactive terminal.
+     * [--site-id=<id>]
+     * : Source Multisite website ID for export; asks if omitted.
      *
      * ## EXAMPLES
      *
      *     wp rrze-migration wizard export --url=https://source.example.test/site/
+     *     wp rrze-migration wizard export --site-id=5
      *     wp rrze-migration wizard import
      */
     public function __invoke($args, $assoc_args)
@@ -28,8 +31,8 @@ final class Wizard extends Command
         $async = false;
         try {
             $config = WP_CLI::get_config();
-            if ($assoc_args || !empty($config['yes']) || !empty($config['quiet'])) {
-                throw new RuntimeException('The wizard requires visible, explicit answers; --yes, --quiet and command options are not supported. Use export all or import all for automation.');
+            if (array_diff(array_keys($assoc_args), ['site-id']) || !empty($config['yes']) || !empty($config['quiet'])) {
+                throw new RuntimeException('The wizard requires visible, explicit answers; only --site-id for export is supported. --yes and --quiet are not allowed. Use export all or import all for automation.');
             }
             if (!$terminal->interactive()) {
                 throw new RuntimeException('The wizard requires an interactive input and output terminal. Use export all or import all --dry-run for scripts.');
@@ -51,8 +54,23 @@ final class Wizard extends Command
             }
             $operation = $args[0] ?? $terminal->choice('Operation', ['import', 'export'], 'import');
             if ($operation === 'export') {
-                $this->exportSite($terminal);
+                $sourceOptions = $assoc_args;
+                if (is_multisite() && !array_key_exists('site-id', $sourceOptions)) {
+                    $sourceOptions['site-id'] = $terminal->ask('Source website ID', (string) get_current_blog_id(), static function ($value): void {
+                        ExportSource::resolve($value);
+                    });
+                }
+                $forward = array_key_exists('site-id', $sourceOptions)
+                    ? ExportSource::command('rrze-migration wizard', ['export'], $sourceOptions) : null;
+                if ($forward === null) {
+                    $this->exportSite($terminal);
+                } else {
+                    $terminal->line('Loading the selected website context before confirming the export source...');
+                }
             } elseif ($operation === 'import') {
+                if (array_key_exists('site-id', $assoc_args)) {
+                    throw new RuntimeException('--site-id selects an export source and is not supported for import.');
+                }
                 $this->importSite($terminal);
             } else {
                 throw new RuntimeException('Choose wizard import or wizard export.');
@@ -71,11 +89,20 @@ final class Wizard extends Command
         if (isset($failure)) {
             WP_CLI::error(Terminal::safe($failure));
         }
+        if (isset($forward)) {
+            // Preserve the real terminal, but restore this process's signal handlers before handing it over.
+            WP_CLI::runcommand($forward);
+        }
     }
 
     private function exportSite(Terminal $terminal): void
     {
-        $terminal->line('The current website is the export source. Select another source with the global --url option before starting.');
+        $sourceId = get_current_blog_id();
+        $sourceUrl = home_url();
+        $terminal->line('Export source: ID ' . $sourceId . ' | URL: ' . $sourceUrl);
+        if (!$terminal->confirm('Export this website')) {
+            throw new RuntimeException('Export cancelled. No output file was created.');
+        }
         $root = $this->storage($terminal);
         $file = $terminal->ask('New ZIP filename (without a directory)', 'website.zip', static function ($value) use ($root): void {
             PackageStorage::exportPath($root, $value, get_current_blog_id());
@@ -92,7 +119,10 @@ final class Wizard extends Command
             $terminal->line('Upload directories are included unless explicitly excluded. Server configuration and executable files block the export.');
             $options['exclude-upload-dirs'] = $terminal->ask('Upload subdirectories to exclude, comma-separated (optional; e.g. wp-migrate-db)');
         }
-        (new Export(static function (array $plan) use ($terminal): bool {
+        (new Export(static function (array $plan) use ($terminal, $sourceId, $sourceUrl): bool {
+            if ($plan['site_id'] !== $sourceId || $plan['source'] !== $sourceUrl) {
+                throw new RuntimeException('The export source changed after confirmation. Start the wizard again to review the current website.');
+            }
             $terminal->line('Export plan');
             $terminal->line('Source: ' . $plan['source'] . ' (site ID ' . $plan['site_id'] . ')');
             $terminal->line('Output: ' . $plan['output']);
