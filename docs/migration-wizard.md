@@ -31,7 +31,7 @@ Beide Abläufe fragen nach `Private migration directory outside web roots`; beim
 wp rrze-migration wizard export --site-id=5
 ```
 
-Ohne `--site-id` bietet die visuelle Oberfläche auf Multisite bis zu 100 Websites des aktuellen Netzwerks mit ID und URL an. Die Vorgabe ist eine manuelle ID-Eingabe; dort und im Textmodus fragt der Assistent nach `Source website ID`, mit der aktuellen Website-ID als Vorgabe. Der bisherige URL-Aufruf bleibt möglich und bestimmt diese Vorgabe:
+Ohne `--site-id` zeigt die visuelle Oberfläche eine Auswahlliste mit ID und URL, wenn das aktuelle Netzwerk höchstens 20 Websites enthält. Die Vorgabe ist eine manuelle ID-Eingabe. Bei mehr als 20 Websites entfällt die Liste vollständig; der Assistent fragt direkt nach `Source website ID`, wie auch im Textmodus. Zur Entscheidung werden höchstens 21 Websites abgefragt; große Netzwerke werden nicht vollständig geladen. Bei der manuellen Eingabe ist die aktuelle Website-ID die Vorgabe. Der bisherige URL-Aufruf bleibt möglich und bestimmt diese Vorgabe:
 
 ```sh
 wp rrze-migration wizard export --url=https://source.example.test/site/

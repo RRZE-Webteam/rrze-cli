@@ -68,11 +68,15 @@ final class Wizard extends Command
                 if (is_multisite() && !array_key_exists('site-id', $sourceOptions)) {
                     $selected = 'manual';
                     if ($terminal->rich) {
-                        $sites = ['manual' => 'Enter a website ID'];
-                        foreach (get_sites(['network_id' => get_current_network_id(), 'number' => 100, 'orderby' => 'id', 'order' => 'ASC']) as $site) {
-                            $sites['site-' . $site->blog_id] = 'ID ' . $site->blog_id . ' | ' . get_home_url($site->blog_id);
+                        // One extra result detects larger networks without loading every website.
+                        $availableSites = get_sites(['network_id' => get_current_network_id(), 'number' => 21, 'orderby' => 'id', 'order' => 'ASC']);
+                        if (count($availableSites) <= 20) {
+                            $sites = ['manual' => 'Enter a website ID'];
+                            foreach ($availableSites as $site) {
+                                $sites['site-' . $site->blog_id] = 'ID ' . $site->blog_id . ' | ' . get_home_url($site->blog_id);
+                            }
+                            $selected = $terminal->select('Export website', $sites, 'manual');
                         }
-                        $selected = $terminal->select('Export website (up to 100 listed)', $sites, 'manual');
                     }
                     $sourceOptions['site-id'] = $selected === 'manual'
                         ? $terminal->ask('Source website ID', (string) get_current_blog_id(), static fn ($value) => ExportSource::resolve($value))
