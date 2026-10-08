@@ -356,6 +356,7 @@ class Utils
     public static function checked_command($command, $args = [], $assoc_args = [], $global_args = [])
     {
         $result = self::runcommand($command, $args, $assoc_args, $global_args);
+        Migration\Diagnostics::command($command, $result->stderr, $result->return_code);
         if ($result->return_code !== 0) {
             throw new \RuntimeException(sprintf('Migration command "%s" failed (exit %d).', $command, $result->return_code));
         }

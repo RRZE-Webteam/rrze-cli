@@ -10,9 +10,18 @@ Den Befehl im Hauptverzeichnis der betreffenden WordPress-Installation in einem 
 wp rrze-migration wizard
 ```
 
-Ohne Unterauswahl fragt der Assistent nach `import` oder `export`. Am Anfang zeigt er das WordPress-Verzeichnis, die aktuelle Website mit ID und bei Multisite das aktuelle Netzwerk. Die globalen WP-CLI-Parameter, insbesondere `--url`, wählen diesen anfänglichen Kontext. Für den Export kann anschließend eine Website-ID derselben Multisite-Installation ausgewählt werden. Der Assistent wechselt nicht zwischen Servern und überträgt kein Paket auf einen anderen Rechner.
+Im interaktiven Terminal verwendet der Assistent Laravel Prompts mit Auswahl per Pfeiltasten und Enter, umrahmten Eingaben und farbigen Statusmarkierungen. Ohne Unterauswahl fragt er nach `import` oder `export`. Am Anfang zeigt er das WordPress-Verzeichnis, die aktuelle Website mit ID und bei Multisite das aktuelle Netzwerk. Die globalen WP-CLI-Parameter, insbesondere `--url`, wählen diesen anfänglichen Kontext. Für den Export kann anschließend eine Website-ID derselben Multisite-Installation ausgewählt werden. Der Assistent wechselt nicht zwischen Servern und überträgt kein Paket auf einen anderen Rechner.
 
-Die Fragen sind wie die übrigen Migrationsausgaben auf Englisch. Vorgaben direkt hinter einer Eingabefrage stehen in eckigen Klammern und gelten für Enter. `!quit` bricht an jeder Eingabe ab. ZIP-Importpfade beziehen sich auf das private Migrationsverzeichnis oder werden absolut außerhalb der Webverzeichnisse angegeben. Exportnamen enthalten ausschließlich den Dateinamen ohne Verzeichnis. Leerzeichen in Dateinamen werden ohne Shell-Auswertung verarbeitet; bei der interaktiven Eingabe keine zusätzlichen Anführungszeichen setzen.
+Die Fragen sind wie die übrigen Migrationsausgaben auf Englisch. Bei Texteingaben stehen Vorgaben in eckigen Klammern und gelten für Enter. Bei Auswahllisten gilt der markierte Eintrag. `!quit` bricht an jeder Eingabe ab. ZIP-Importpfade beziehen sich auf das private Migrationsverzeichnis oder werden absolut außerhalb der Webverzeichnisse angegeben. Exportnamen enthalten ausschließlich den Dateinamen ohne Verzeichnis. Leerzeichen in Dateinamen werden ohne Shell-Auswertung verarbeitet; bei der interaktiven Eingabe keine zusätzlichen Anführungszeichen setzen.
+
+Mit `--plain` bleiben die bisherigen zeilenweisen Eingaben verfügbar. `--no-color` oder `TERM=dumb` schalten ebenfalls auf Textbedienung um; `--no-color` deaktiviert zusätzlich die WP-CLI-Farben. Kann das Terminal nicht gesteuert werden, bricht der Assistent mit einem Hinweis auf `--plain` ab. Es werden dabei keine Vorgaben automatisch bestätigt.
+
+```sh
+wp rrze-migration wizard import --plain
+wp rrze-migration wizard import --verbose
+```
+
+Die visuelle Planansicht fasst Tabellen und Benutzeraktionen zusammen. `--verbose` zeigt die einzelnen Tabellen und Benutzeraktionen. Vollständige Quell- und Zieladressen, Paketpfad, Medienentscheidung und Ausschlüsse bleiben sichtbar. Lange Einträge können innerhalb einer Auswahlliste gekürzt erscheinen; die aufgelöste Auswahl wird anschließend vollständig ausgegeben.
 
 Beide Abläufe fragen nach `Private migration directory outside web roots`; beim Export erfolgt vorher die Auswahl und Bestätigung der Quelle. Eine konfigurierte `RRZE_MIGRATION_RUN_DIR` dient als Vorgabe. Der Pfad muss absolut und privat sein und außerhalb von WordPress und `wp-content` liegen; andere Webserver dürfen ihn ebenfalls nicht veröffentlichen. Das Elternverzeichnis muss bereits existieren. Die Pfadprüfung und eine Vorschau legen dort noch keine Verzeichnisse an. Bei einem bestätigten Export oder einem vorbereiteten echten Import wird ein fehlendes Stammverzeichnis mit Modus `0700` angelegt.
 
@@ -22,7 +31,7 @@ Beide Abläufe fragen nach `Private migration directory outside web roots`; beim
 wp rrze-migration wizard export --site-id=5
 ```
 
-Ohne `--site-id` fragt der Assistent auf Multisite nach `Source website ID`; die aktuelle Website-ID ist die Vorgabe. Der bisherige URL-Aufruf bleibt möglich und bestimmt diese Vorgabe:
+Ohne `--site-id` bietet die visuelle Oberfläche auf Multisite bis zu 100 Websites des aktuellen Netzwerks mit ID und URL an. Die Vorgabe ist eine manuelle ID-Eingabe; dort und im Textmodus fragt der Assistent nach `Source website ID`, mit der aktuellen Website-ID als Vorgabe. Der bisherige URL-Aufruf bleibt möglich und bestimmt diese Vorgabe:
 
 ```sh
 wp rrze-migration wizard export --url=https://source.example.test/site/
@@ -30,12 +39,12 @@ wp rrze-migration wizard export --url=https://source.example.test/site/
 
 Die ID muss eine positive ganze Zahl sein und zu einer vorhandenen Website gehören. Bei einer anderen Website wird WordPress in einem neuen WP-CLI-Prozess mit deren registrierter Adresse geladen, damit auch ihre Plugins, Rollen und Upload-Einstellungen aktiv sind. Erst nach Prüfung der geladenen ID folgt die Bestätigung. Eine falsche Zuordnung führt zum Abbruch. Wird zusätzlich `--url` angegeben, entscheidet die ausdrücklich ausgewählte ID über die Exportquelle. Bei einer Einzelinstallation wird die aktuelle Website bestätigt; `--site-id` ist dort nicht verfügbar.
 
-1. Die angezeigte Zuordnung `Export source: ID 5 | URL: …` prüfen und `Export this website (yes/no) [no]` mit `yes` beantworten. Enter, `no`, `!quit` oder Eingabeende brechen vor der Anlage von Exportdateien ab. Bei einer falschen Quelle abbrechen und mit der richtigen ID neu starten.
+1. Die angezeigte Zuordnung `Export source: ID 5 | URL: …` prüfen und `Export this website` ausdrücklich bestätigen: im visuellen Modus `Yes` auswählen bzw. `y` drücken und Enter; im Textmodus `yes` eingeben. Vorgabe bleibt `No`. Enter, `no`, `!quit` oder Eingabeende brechen vor der Anlage von Exportdateien ab. Bei einer falschen Quelle abbrechen und mit der richtigen ID neu starten.
 2. Das private Migrationsverzeichnis bestätigen und einen ZIP-Dateinamen ohne Pfad wählen. Eine fehlende Endung `.zip` wird ergänzt. Jeder Export erhält einen eigenen Ordner `export-<UTC-Zeitstempel>-site-<ID>-<Zufallskennung>`; derselbe Dateiname überschreibt deshalb keinen älteren Export.
 3. Bei Bedarf zusätzliche, ausschließlich dieser Website gehörende Tabellen angeben. Die automatische Auswahl entspricht `export all`; bei Hauptsites sind zusätzliche eigene Tabellen ausdrücklich zu benennen und fachlich zu prüfen.
 4. Die Medienauswahl prüfen. Uploads sind vorausgewählt. Plugins und Themes werden separat im Ziel bereitgestellt.
 5. Bei enthaltenen Uploads gegebenenfalls Verzeichnisse ausdrücklich ausschließen. Die Eingabe bleibt normalerweise leer. Für ein nicht zu migrierendes Plugin-Arbeitsverzeichnis wie `wp-migrate-db` genau diesen relativen Namen eingeben; mehrere Namen werden mit Komma getrennt. Es werden keine Verzeichnisse automatisch ausgelassen.
-6. Den Plan mit Quelle, Tabellen, Ausgabeort, Medienauswahl und Ausschlüssen lesen. Die angezeigte vollständige Quell-URL wiederholen und anschließend `yes` eingeben.
+6. Den Plan mit Quelle, Tabellenumfang, Ausgabeort, Medienauswahl und Ausschlüssen lesen. Die angezeigte vollständige Quell-URL wiederholen und anschließend ausdrücklich `Yes` bestätigen (Textmodus: `yes`).
 
 Erst nach dieser Bestätigung werden der angezeigte Export-Unterordner und die ZIP-Datei angelegt. Der Ordner erhält Modus `0700`, die Datei `0600`. Abbrüche vor der Bestätigung hinterlassen keinen Exportordner; bei einem behandelten Exportfehler wird die unvollständige Ausgabe entfernt. Der Export enthält keine Benutzerpasswörter oder Sitzungstoken. Die ZIP-Datei anschließend über den betrieblich vorgesehenen Weg in ein privates Verzeichnis des Zielsystems übertragen, beispielsweise `<RRZE_MIGRATION_RUN_DIR>/incoming/website.zip`. Bei einem Import auf demselben System kann der angezeigte Exportpfad direkt verwendet werden.
 
@@ -51,13 +60,13 @@ wp rrze-migration wizard import
 
 Der Import benötigt eine Multisite. Der Assistent fragt zuerst nach dem privaten Migrationsverzeichnis und anschließend nach einer lesbaren Paketdatei, einer ausdrücklich angegebenen neuen Ziel-URL und gegebenenfalls Post-Metafeldern mit numerischen Benutzer-IDs. Eine bereits belegte Adresse wird zurückgewiesen; es gibt keinen Löschschritt. War diese Adresse bisher belegt, muss die alte Website vorher manuell in Network Admin gelöscht worden sein. Vor dieser Löschung bleibt eine unabhängige Sicherung erforderlich.
 
-Gefundene ZIP-Dateien erscheinen in einer nummerierten Liste mit relativem Pfad, Änderungsdatum der Datei in UTC und Größe in MiB. Neuere Änderungen stehen zuerst; bei gleichem Datum entscheidet der Pfad. So bleiben gleich benannte Pakete in verschiedenen Unterverzeichnissen unterscheidbar. Beispielsweise wählt die Eingabe `2` den angezeigten Eintrag `[2]`. Der Assistent zeigt danach den vollständigen ausgewählten Pfad. Es gibt keine vorausgewählte Datei; Enter allein wählt kein Paket, ungültige Nummern führen zur erneuten Eingabe.
+Gefundene ZIP-Dateien erscheinen im visuellen Modus in einer Pfeiltasten-Auswahl. Vorgabe ist `Enter a private ZIP path`; Enter allein wählt also keine Datei. Im Textmodus erscheinen sie in einer nummerierten Liste mit relativem Pfad, Änderungsdatum der Datei in UTC und Größe in MiB. Neuere Änderungen stehen zuerst; bei gleichem Datum entscheidet der Pfad. So bleiben gleich benannte Pakete in verschiedenen Unterverzeichnissen unterscheidbar. Beispielsweise wählt die Eingabe `2` den angezeigten Eintrag `[2]`. Der Assistent zeigt danach den vollständigen ausgewählten Pfad. Es gibt keine vorausgewählte Datei; Enter allein wählt kein Paket, ungültige Nummern führen zur erneuten Eingabe.
 
 Die Suche berücksichtigt das private Stammverzeichnis und bis zu drei Unterverzeichnisebenen, darunter Exportordner, `incoming` und aufbewahrte Importkopien. Sie folgt keinen symbolischen Links und öffnet keine ZIP-Inhalte. Es werden höchstens 5000 Verzeichniseinträge untersucht und 50 ZIP-Dateien angezeigt. Wird eine Grenze erreicht oder ein Unterverzeichnis nicht lesbar, weist der Assistent auf die unvollständige Liste hin. Ein Listeneintrag bestätigt weder ein gültiges Paket noch den Erfolg eines früheren Imports; die bisherigen Paketprüfungen erfolgen nach der Auswahl.
 
 Alternativ direkt einen Paketpfad wie `incoming/website.zip` oder `export-<Zeitstempel>-site-<ID>-<Kennung>/website.zip` eingeben. Ein absoluter privater Pfad ist ebenfalls möglich, auch bei leerer Liste oder einem noch nicht angelegten Migrationsverzeichnis. ZIP-Dateien innerhalb von WordPress oder `wp-content` werden abgelehnt, auch wenn ein Verzeichnislink dorthin führt. Alte Pakete zuerst selbst aus dem Webroot in private Ablage verschieben. Es gibt keinen stillen Rückgriff auf das WordPress-Verzeichnis, und die ursprüngliche Eingabedatei wird nicht automatisch verschoben oder gelöscht.
 
-Bei `Next action (preview/import) [preview]` startet Enter die vollständige Vorprüfung. Sie zeigt die normalisierte Zieladresse, das Zielnetzwerk, die geschätzte Site-ID, Tabellen, Benutzeraktionen, Referenzfelder und Medien. Dabei entstehen keine Zielwebsite, Benutzerkonten, Zieltabellen, Ziel-Uploads oder dauerhaften Laufdaten. Die privaten Prüfdateien werden anschließend entfernt. WordPress und aktive Plugins werden wie bei anderen WP-CLI-Aufrufen geladen.
+Bei `Next action` startet Enter in beiden Darstellungen die vorausgewählte vollständige Vorprüfung `preview`. Sie zeigt die normalisierte Zieladresse, das Zielnetzwerk, die geschätzte Site-ID, Tabellen, Benutzeraktionen, Referenzfelder und Medien. Dabei entstehen keine Zielwebsite, Benutzerkonten, Zieltabellen, Ziel-Uploads oder dauerhaften Laufdaten. Die privaten Prüfdateien werden anschließend entfernt. WordPress und aktive Plugins werden wie bei anderen WP-CLI-Aufrufen geladen.
 
 ## Bei Upload-Einschränkungen ohne Medien fortfahren
 
@@ -67,9 +76,9 @@ Bei benutzerdefinierten Upload-Pfaden, `upload_dir`-Filtern oder alten Multisite
 Continue without uploads (yes/no) [no]:
 ```
 
-Enter, `!quit` und Eingabeende brechen ab. Mit `yes` wird derselbe geprüfte Paketinhalt erneut geplant, diesmal ohne automatischen Medientransfer. Eine Vorschau bleibt eine Vorschau. Beim Import folgen weiterhin der vollständige Plan, die Bestätigung der Ziel-URL und die abschließende Zustimmung. Eine Zustimmung aus einem früheren Vorschau-Aufruf wird nicht gespeichert oder für einen späteren Import übernommen.
+Enter, `!quit` und Eingabeende brechen ab. Mit ausdrücklicher Zustimmung (`Yes` und Enter bzw. `yes` im Textmodus) wird derselbe geprüfte Paketinhalt erneut geplant, diesmal ohne automatischen Medientransfer. Eine Vorschau bleibt eine Vorschau. Beim Import folgen weiterhin der vollständige Plan, die Bestätigung der Ziel-URL und die abschließende Zustimmung. Eine Zustimmung aus einem früheren Vorschau-Aufruf wird nicht gespeichert oder für einen späteren Import übernommen.
 
-Der Plan kennzeichnet `Media transfer: SKIPPED`, nennt weiterhin den Medienumfang im Paket und gibt keinen vermeintlich geprüften Upload-Zielpfad an. Die Dateien müssen anschließend separat, beispielsweise mit `rsync`, übertragen werden. Den tatsächlichen Upload-Pfad und die Medien-URLs im Ziel prüfen und gegebenenfalls anpassen: Die allgemeine Ersetzung der Website-URL läuft weiter, die gesonderte Umschreibung von `wp-content/uploads/sites/<Quell-ID>` auf die neue Site-ID entfällt. Die Quelloptionen `upload_path` und `upload_url_path` werden weiterhin zurückgesetzt. Ein erfolgreicher Datenimport bestätigt weder den separaten Transfer noch die Funktionsfähigkeit der Medien.
+Die ausführliche Textansicht kennzeichnet `Media transfer: SKIPPED`, die kompakte Ansicht warnt vor dem notwendigen manuellen Transfer. Der Plan nennt weiterhin den Medienumfang im Paket und gibt keinen vermeintlich geprüften Upload-Zielpfad an. Die Dateien müssen anschließend separat, beispielsweise mit `rsync`, übertragen werden. Den tatsächlichen Upload-Pfad und die Medien-URLs im Ziel prüfen und gegebenenfalls anpassen: Die allgemeine Ersetzung der Website-URL läuft weiter, die gesonderte Umschreibung von `wp-content/uploads/sites/<Quell-ID>` auf die neue Site-ID entfällt. Die Quelloptionen `upload_path` und `upload_url_path` werden weiterhin zurückgesetzt. Ein erfolgreicher Datenimport bestätigt weder den separaten Transfer noch die Funktionsfähigkeit der Medien.
 
 Paketsicherheit und Prüfsummen gelten auch für enthaltene Medien weiterhin; das Archiv wird unverändert geprüft und vorübergehend entpackt. Belegte Zieladressen, vorhandene Tabellen und Mitgliedschaften sowie Dateien oder Links am Standard-Uploadpfad werden weiterhin abgelehnt. Individuelle Upload-Verzeichnisse werden in diesem Modus nicht aufgelöst oder auf Restbestände geprüft. Fremde WordPress-/Plugin-Hooks werden weiterhin geladen; dieser Modus isoliert deren Seiteneffekte nicht.
 
@@ -81,15 +90,15 @@ Die Abschlussmeldung nennt den erfolgreichen Datenimport und die ausstehenden Me
 
 Den Assistenten erneut starten und bei `Next action` ausdrücklich `import` wählen. Das am Anfang ausgewählte private Migrationsverzeichnis dient auch als Stammverzeichnis für den neuen Importlauf. Einrichtung und Aufbewahrung beschreibt die [Wiederherstellungsanleitung](migration-recovery.md).
 
-Vor dem Bestätigen wird das Paket privat kopiert und geprüft. Der Plan bezieht sich auf genau diese Kopie. Er nennt die bestehenden WordPress-Konten, die eine neue Website-Mitgliedschaft erhalten, und die fehlenden Konten, die mit zufälligem lokalem Passwort angelegt werden. Konten, die nur von Beiträgen oder Kommentaren referenziert werden und keine Quellmitgliedschaft haben, erscheinen als `reference only; no site membership`; sie erhalten auch am Ziel keine Mitgliedschaft. Fehlende Identitäten für diese Kernreferenzen stoppen bereits die Vorprüfung. SSO-Identitäten werden nicht angelegt oder verändert. Fehlende Medien verlangen eine zusätzliche ausdrückliche Bestätigung; ein separater Transfer wird dadurch nicht als geprüft ausgegeben.
+Vor dem Bestätigen wird das Paket privat kopiert und geprüft. Der Plan bezieht sich auf genau diese Kopie. Die ausführliche Ansicht (`--verbose` oder Textmodus) nennt die bestehenden WordPress-Konten, die eine neue Website-Mitgliedschaft erhalten, und die fehlenden Konten, die mit zufälligem lokalem Passwort angelegt werden. Konten, die nur von Beiträgen oder Kommentaren referenziert werden und keine Quellmitgliedschaft haben, erscheinen als `reference only; no site membership`; sie erhalten auch am Ziel keine Mitgliedschaft. Fehlende Identitäten für diese Kernreferenzen stoppen bereits die Vorprüfung. SSO-Identitäten werden nicht angelegt oder verändert. Fehlende Medien verlangen eine zusätzliche ausdrückliche Bestätigung; ein separater Transfer wird dadurch nicht als geprüft ausgegeben.
 
 Enthält das Paket ausdrücklich ausgeschlossene Upload-Verzeichnisse, zeigt der Plan deren Namen. Der Wizard verlangt dafür eine zusätzliche Zustimmung mit Vorgabe `no`: Diese Verzeichnisse werden weder übertragen noch auf Vollständigkeit geprüft. Eine ausdrückliche Auswahl beim Export lockert keine Pfad-, Dateityp- oder Prüfsummenregel für die enthaltenen Dateien.
 
-Die vollständig angezeigte Ziel-URL einschließlich Schema und abschließendem Pfad wiederholen. Danach fragt der Assistent, ob er die neue Website anlegen und den Plan ausführen soll. Nur `yes` stimmt zu; Enter bedeutet `no`. Eine abweichende URL bricht ab.
+Die vollständig angezeigte Ziel-URL einschließlich Schema und abschließendem Pfad wiederholen. Danach fragt der Assistent, ob er die neue Website anlegen und den Plan ausführen soll. Die Vorgabe ist `No`; Enter allein lehnt ab. Im visuellen Modus `Yes` auswählen und mit Enter bestätigen, im Textmodus `yes` eingeben. Eine abweichende URL bricht ab.
 
 Nach der Bestätigung wird der Plan unter der Migrationssperre erneut geprüft. Ändern sich Zielressourcen, geschätzte Site-ID, Benutzeraktionen oder andere angezeigte Entscheidungen, stoppt der Import vor der Site-Anlage. Der Assistent muss dann mit einem neuen Plan gestartet werden. Der verfügbare Speicher darf sich verändern, muss aber weiterhin die Kapazitätsprüfung bestehen. Eine Änderung der ursprünglich angegebenen ZIP-Datei ersetzt nicht die bereits geprüfte private Kopie.
 
-Während der Ausführung benennt die Konsole die laufenden Schritte. Erst nach der Ergebnisprüfung und Bereinigung erscheint die Erfolgsmeldung. Inhalte, Medien, Rollen und reale SSO-Anmeldung sind anschließend betrieblich abzunehmen.
+Während der Ausführung benennt die Konsole die laufenden Schritte. Die visuelle Ansicht markiert den Beginn mit `→`, einen erfolgreich beendeten Schritt mit `✓` und einen fehlgeschlagenen Schritt mit `✕`. Diese Zeilen bleiben im Terminalverlauf stehen; ein Haken bestätigt nur den jeweiligen Schritt. Erst nach der Ergebnisprüfung und Bereinigung erscheint die Erfolgsmeldung. Inhalte, Medien, Rollen und reale SSO-Anmeldung sind anschließend betrieblich abzunehmen.
 
 ## Abbrechen und Fehler untersuchen
 
@@ -103,9 +112,25 @@ wp rrze-migration status RUN_ID --run-dir=/srv/private/rrze-migrations
 
 Die Hinweise zu harten Prozessabbrüchen, noch laufenden Kindprozessen und manueller Wiederherstellung gelten unverändert. Der Assistent bietet weder Wiederaufnahme noch automatisches Löschen oder Zurückspielen globaler Tabellen an.
 
+## PHP-Diagnosen und frühe Startmeldungen
+
+Bei `rrze-migration` sammelt das Plugin aktive PHP-Deprecations ab seinem Ladezeitpunkt und zeigt am Ende eine kurze Zusammenfassung auf STDERR. Wiederholungen derselben Datei und Zeile werden gezählt; höchstens 100 unterschiedliche Ursprünge werden gespeichert. Normale PHP-Warnungen und Fehler bleiben sichtbar. `--debug` deaktiviert diese Sammlung für die native Fehlersuche.
+
+Bei einem echten Import wird der Bericht `diagnostics-<Kennung>.json` im privaten Laufverzeichnis gespeichert, bei einem erfolgreichen Export neben der ZIP-Datei. Er ist kein Bestandteil des Exportpakets. Bei einem Exportfehler nach Einrichtung der Ablage liegt er im privaten Stammverzeichnis. Verzeichnisse bleiben `0700`, Berichte `0600`. Vorschau und Abbruch vor Einrichtung der Ablage erzeugen keine dauerhafte Diagnosedatei; die Zusammenfassung nennt dann bis zu fünf Ursprünge direkt im Terminal.
+
+Der Bericht enthält Typ, Datei/Zeile beziehungsweise internen Befehlsnamen und Häufigkeit. Fehlermeldungstexte, Befehlsargumente und SQL werden nicht protokolliert. Diagnosen abgefangener WP-CLI-Unterprozesse werden als Befehlsereignis gezählt; ein erfolgreicher Unterprozess mit STDERR-Ausgabe erhält einen sichtbaren Hinweis. Ein Fehler beim Speichern des Berichts verändert weder den Exit-Code noch den protokollierten Migrationsstatus. JSON-Vorschauen und JSON-Statusausgaben bleiben von diesen Zusammenfassungen getrennt auf STDOUT.
+
+PHP- und WP-CLI-Meldungen können bereits vor dem Laden des Plugins entstehen. Für eine frühere Sammlung kann der mitgelieferte Einstiegspunkt ausdrücklich geladen werden:
+
+```sh
+wp --require=/absoluter/pfad/wp-content/plugins/rrze-cli/migration-bootstrap.php rrze-migration wizard import
+```
+
+Alternativ denselben absoluten Pfad als `require` in einer geeigneten WP-CLI-Konfiguration hinterlegen. Der Einstiegspunkt greift nur bei `rrze-migration`; andere WP-CLI-Befehle behalten ihre normale Fehlerbehandlung. Meldungen vor der Verarbeitung von `--require`, PHP-Startfehler und Ausgaben fremder Fehlerhandler lassen sich damit nicht vollständig erfassen. Ein erneuter Lauf mit `--debug` zeigt die normalen Diagnosemeldungen; solche Ausgaben vor dem Teilen auf vertrauliche Inhalte prüfen.
+
 ## Automatisierte Aufrufe
 
-Der Wizard verlangt interaktive Ein- und Ausgabe und akzeptiert keine automatische Zustimmung mit `--yes` oder unterdrückte Ausgabe mit `--quiet`. Die einzige Migrationsoption ist `--site-id` für den Export; beim Import ist sie unzulässig. Für Skripte bleiben die expliziten Befehle verfügbar. Diese Beispiele setzen eine konfigurierte `RRZE_MIGRATION_RUN_DIR` voraus:
+Der Wizard verlangt interaktive Ein- und Ausgabe und akzeptiert keine automatische Zustimmung mit `--yes` oder unterdrückte Ausgabe mit `--quiet`. Zusätzlich zu `--plain` und `--verbose` unterstützt der Wizard `--site-id` für den Export; beim Import ist diese Option unzulässig. Für Skripte bleiben die expliziten Befehle verfügbar. Diese Beispiele setzen eine konfigurierte `RRZE_MIGRATION_RUN_DIR` voraus:
 
 ```sh
 wp rrze-migration export all website.zip --site-id=5 --uploads
@@ -113,4 +138,4 @@ wp rrze-migration import all incoming/website.zip --new_url=https://target.examp
 wp rrze-migration import all incoming/website.zip --new_url=https://target.example.test/site/ --run-dir=/srv/private/rrze-migrations
 ```
 
-Diese Befehle fragen nicht nach einer interaktiven Freigabe. `export all` unterstützt dieselbe ID-Auflösung und Kontextprüfung; die Rohbefehle `export tables` und `export users` werden weiterhin über `--url` gesteuert. Für eine ausdrücklich gewünschte manuelle Medienübertragung `--skip-uploads` sowohl zur Vorschau als auch zum Import hinzufügen. Ohne diese Option bleibt die Upload-Einschränkung im direkten Befehl ein Fehler. Paket-, Website-, Tabellen- und Benutzerprüfungen gelten unverändert. Die Oberfläche benötigt keine zusätzliche Prompt-Bibliothek; Ein- und Ausgabe erfolgen über die vorhandene PHP-/WP-CLI-Laufzeit.
+Diese Befehle fragen nicht nach einer interaktiven Freigabe. `export all` unterstützt dieselbe ID-Auflösung und Kontextprüfung; die Rohbefehle `export tables` und `export users` werden weiterhin über `--url` gesteuert. Für eine ausdrücklich gewünschte manuelle Medienübertragung `--skip-uploads` sowohl zur Vorschau als auch zum Import hinzufügen. Ohne diese Option bleibt die Upload-Einschränkung im direkten Befehl ein Fehler. Paket-, Website-, Tabellen- und Benutzerprüfungen gelten unverändert. Laravel Prompts und seine Abhängigkeiten werden mit dem Plugin ausgeliefert. Ein Laravel-Projekt ist nicht erforderlich; PHP 8.2 bleibt die Mindestversion.

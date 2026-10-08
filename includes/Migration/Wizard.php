@@ -17,6 +17,10 @@ final class Wizard extends Command
      * : import or export; asks if omitted. Requires an interactive terminal.
      * [--site-id=<id>]
      * : Source Multisite website ID for export; asks if omitted.
+     * [--plain]
+     * : Use line-oriented prompts without terminal controls (also used with --no-color).
+     * [--verbose]
+     * : Show individual table mappings and user actions in the review.
      *
      * ## EXAMPLES
      *
@@ -26,14 +30,15 @@ final class Wizard extends Command
      */
     public function __invoke($args, $assoc_args)
     {
-        $terminal = new Terminal(STDIN, STDOUT);
         $handlers = [];
         $async = false;
         try {
             $config = WP_CLI::get_config();
-            if (array_diff(array_keys($assoc_args), ['site-id']) || !empty($config['yes']) || !empty($config['quiet'])) {
-                throw new RuntimeException('The wizard requires visible, explicit answers; only --site-id for export is supported. --yes and --quiet are not allowed. Use export all or import all for automation.');
+            if (array_diff(array_keys($assoc_args), ['site-id', 'plain', 'verbose']) || !empty($config['yes']) || !empty($config['quiet'])) {
+                throw new RuntimeException('The wizard requires visible, explicit answers. --yes and --quiet are not allowed. Use export all or import all for automation.');
             }
+            Console::configure(isset($assoc_args['plain']), isset($assoc_args['verbose']));
+            $terminal = new Terminal(STDIN, STDOUT, Console::get()->rich);
             if (!$terminal->interactive()) {
                 throw new RuntimeException('The wizard requires an interactive input and output terminal. Use export all or import all --dry-run for scripts.');
             }
@@ -46,7 +51,12 @@ final class Wizard extends Command
                     }, false);
                 }
             }
-            $terminal->line('RRZE migration wizard — type !quit at any prompt to cancel.');
+            if ($terminal->rich) {
+                Console::get()->heading('RRZE Migration');
+                $terminal->line('Arrows to select · Enter to confirm · Ctrl+C to cancel · --plain for text mode');
+            } else {
+                $terminal->line('RRZE migration wizard — type !quit at any prompt to cancel.');
+            }
             $terminal->line('WordPress directory: ' . ABSPATH);
             $terminal->line('Current website: ' . home_url() . ' (site ID ' . get_current_blog_id() . ')');
             if (is_multisite()) {
@@ -56,9 +66,17 @@ final class Wizard extends Command
             if ($operation === 'export') {
                 $sourceOptions = $assoc_args;
                 if (is_multisite() && !array_key_exists('site-id', $sourceOptions)) {
-                    $sourceOptions['site-id'] = $terminal->ask('Source website ID', (string) get_current_blog_id(), static function ($value): void {
-                        ExportSource::resolve($value);
-                    });
+                    $selected = 'manual';
+                    if ($terminal->rich) {
+                        $sites = ['manual' => 'Enter a website ID'];
+                        foreach (get_sites(['network_id' => get_current_network_id(), 'number' => 100, 'orderby' => 'id', 'order' => 'ASC']) as $site) {
+                            $sites['site-' . $site->blog_id] = 'ID ' . $site->blog_id . ' | ' . get_home_url($site->blog_id);
+                        }
+                        $selected = $terminal->select('Export website (up to 100 listed)', $sites, 'manual');
+                    }
+                    $sourceOptions['site-id'] = $selected === 'manual'
+                        ? $terminal->ask('Source website ID', (string) get_current_blog_id(), static fn ($value) => ExportSource::resolve($value))
+                        : substr($selected, 5);
                 }
                 $forward = array_key_exists('site-id', $sourceOptions)
                     ? ExportSource::command('rrze-migration wizard', ['export'], $sourceOptions) : null;
@@ -87,7 +105,7 @@ final class Wizard extends Command
             }
         }
         if (isset($failure)) {
-            WP_CLI::error(Terminal::safe($failure));
+            Console::get()->failure($failure, export: ($operation ?? null) === 'export');
         }
         if (isset($forward)) {
             // Preserve the real terminal, but restore this process's signal handlers before handing it over.
@@ -123,14 +141,7 @@ final class Wizard extends Command
             if ($plan['site_id'] !== $sourceId || $plan['source'] !== $sourceUrl) {
                 throw new RuntimeException('The export source changed after confirmation. Start the wizard again to review the current website.');
             }
-            $terminal->line('Export plan');
-            $terminal->line('Source: ' . $plan['source'] . ' (site ID ' . $plan['site_id'] . ')');
-            $terminal->line('Output: ' . $plan['output']);
-            foreach ($plan['tables'] as $table) {
-                $terminal->line('Table: ' . $table);
-            }
-            $terminal->line('Uploads: ' . ($plan['uploads'] ? 'included' : 'NOT included; separate transfer required'));
-            $terminal->line('Excluded upload directories: ' . (implode(', ', $plan['excluded_upload_directories']) ?: 'none'));
+            Console::get()->exportPlan($plan);
             $terminal->line('Plugins and themes must be provided separately. SSO logins stay unchanged; user credentials are excluded.');
             return $terminal->identity('Export source', $plan['source']) && $terminal->confirm('Create this export package now');
         }))->all([$file], $options);
@@ -163,9 +174,7 @@ final class Wizard extends Command
         }
         (new Import(static function (array $plan) use ($terminal): bool {
             $terminal->line('Import plan');
-            foreach (Plan::lines($plan) as $line) {
-                $terminal->line($line);
-            }
+            Console::get()->plan($plan);
             $terminal->line('Existing global users remain unchanged; missing WordPress accounts receive random local passwords. This does not create SSO identities.');
             $terminal->line('The private package copy and journal are retained even after cancellation. A failed import may leave an incomplete site for manual recovery.');
             if (!$plan['uploads']['skipped'] && !$plan['uploads']['included'] && !$terminal->confirm('Media are absent; a separate transfer is not verified. Continue')) {
@@ -181,6 +190,22 @@ final class Wizard extends Command
     private function package(Terminal $terminal, array $options): string
     {
         $listing = PackageStorage::packages($options);
+        if ($terminal->rich && $listing['files']) {
+            $optionsList = ['manual' => 'Enter a private ZIP path'];
+            foreach ($listing['files'] as $index => $file) {
+                $optionsList['zip-' . $index] = '#' . ($index + 1) . ' ' . $file['path'] . ' | '
+                    . gmdate('Y-m-d H:i', $file['modified']) . ' UTC | ' . number_format($file['bytes'] / 1048576, 1) . ' MiB';
+            }
+            if ($listing['incomplete']) {
+                $terminal->line('Package list is limited; an unlisted ZIP can be entered by path.');
+            }
+            $selected = $terminal->select('Import package (newest first)', $optionsList, 'manual');
+            if ($selected !== 'manual') {
+                $path = PackageStorage::input($listing['files'][(int) substr($selected, 4)]['path'], $options);
+                $terminal->line('Selected package: ' . $path);
+                return $path;
+            }
+        }
         $choices = [];
         if ($listing['files']) {
             $terminal->line('Available ZIP packages (newest modification first; contents checked after selection):');

@@ -735,6 +735,7 @@ PHPHOOK);
                     self::assertSame(count($dialogue), $result['answers']);
                     self::assertStringContainsString('Export source: ID 2 | URL: ' . $url, $result['stdout']);
                     self::assertSame(1, substr_count($result['stdout'], 'Export this website (yes/no) [no]'));
+                    self::assertStringNotContainsString("\033", $result['stdout'], '--no-color must survive the website context switch.');
                 }
                 self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
                 $packages = glob(self::$sandbox->root . '/runs-source/export-*-site-2-*/' . $filename);
@@ -1899,6 +1900,127 @@ PHPHOOK);
         $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $state['preserved_package'], '--new_url=http://target.test/hard-kill/']);
         self::assertNotSame(0, $result['code']);
         self::assertStringContainsString('already exists', $result['stderr']);
+    }
+
+    public function testRichWizardSelectsPackageAndDefaultsToReadOnlyPreview(): void
+    {
+        self::$sandbox->exportPackage();
+        $before = self::$sandbox->fixture('target', 'state');
+        $runs = glob(self::$sandbox->root . '/runs-target/*');
+        // A separate list with one known entry makes arrow selection independent of other tests.
+        $root = self::$sandbox->root . '/rich-preview-packages';
+        mkdir($root, 0700);
+        copy(self::$sandbox->root . '/runs-target/fixture.zip', $root . '/selected.zip');
+        $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], [
+            ['Private migration directory', [$root, "\n"]],
+            ['Import package', ["\e[B", "\n"]],
+            ['New destination URL', ['http://target.test/rich-preview/', "\n"]],
+            ['Post meta keys', ["\n"]],
+            ['Next action', ["\n"]],
+        ], true);
+        self::assertSame(0, $result['code'], $result['stdout']);
+        self::assertSame(5, $result['answers']);
+        self::assertStringContainsString('Selected package: ' . $root . '/selected.zip', $result['stdout']);
+        self::assertStringContainsString('Import plan', $result['stdout']);
+        self::assertStringContainsString('Dry-run complete', $result['stdout']);
+        self::assertStringNotContainsString('Migration run:', $result['stdout']);
+        self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        self::assertSame($runs, glob(self::$sandbox->root . '/runs-target/*'));
+        self::assertCount(1, glob($root . '/*'));
+        $this->assertWorkspaceClean();
+    }
+
+    public function testRichWizardSiteSelectionAndPlainOptionKeepExportConfirmationSafe(): void
+    {
+        $url = trim(self::$sandbox->wp('source', ['option', 'get', 'home', '--url=http://source.test/source/']));
+        $before = self::$sandbox->fixture('source', 'state');
+        $exports = glob(self::$sandbox->root . '/runs-source/*');
+        $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export'], [
+            ['Export website', ["\e[B", "\e[B", "\n"]],
+            ['Export this website', ["\n"]],
+        ], true);
+        self::assertNotSame(0, $result['code']);
+        self::assertSame(2, $result['answers'], $result['stdout']);
+        self::assertStringContainsString('Export source: ID 2 | URL: ' . $url, $result['stdout']);
+        self::assertStringContainsString('No output file was created', $result['stdout']);
+        self::assertStringContainsString('Migration stopped', $result['stdout']);
+        $plain = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--site-id=2', '--plain'], [
+            ['Export this website (yes/no) [no]', ''],
+        ], true);
+        self::assertSame(1, $plain['answers'], $plain['stdout']);
+        self::assertStringNotContainsString('┌', $plain['stdout']);
+        self::assertSame($before, self::$sandbox->fixture('source', 'state'));
+        self::assertSame($exports, glob(self::$sandbox->root . '/runs-source/*'));
+    }
+
+    public function testEarlyDiagnosticsKeepJsonValidAndNeverHideWarningsOrAffectOtherCommands(): void
+    {
+        self::$sandbox->exportPackage();
+        $before = self::$sandbox->fixture('target', 'state');
+        $runs = glob(self::$sandbox->root . '/runs-target/*');
+        $bootstrap = self::$sandbox->root . '/target/wp-content/plugins/rrze-cli/migration-bootstrap.php';
+        $hook = self::$sandbox->root . '/early-diagnostics.php';
+        file_put_contents($hook, '<?php error_reporting(E_ALL); for ($i = 0; $i < 3; $i++) { trigger_error("fixture-sensitive-deprecation-body", E_USER_DEPRECATED); }');
+        $requires = ['--require=' . $bootstrap, '--require=' . $hook];
+        $preview = ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/diagnostic-preview/', '--dry-run', '--format=json', ...$requires];
+        try {
+            $result = self::$sandbox->command('target', $preview);
+            self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
+            self::assertSame('create_new_site', json_decode($result['stdout'], true, 512, JSON_THROW_ON_ERROR)['action']);
+            self::assertStringContainsString('[Diagnostics] 3 events from 1 recorded origins', $result['stderr']);
+            self::assertStringNotContainsString('fixture-sensitive-deprecation-body', $result['stderr']);
+            self::assertSame($runs, glob(self::$sandbox->root . '/runs-target/*'));
+            foreach ([['core', 'version', ...$requires], [...$preview, '--debug']] as $args) {
+                $native = self::$sandbox->command('target', $args);
+                self::assertStringContainsString('fixture-sensitive-deprecation-body', $native['stdout'] . $native['stderr']);
+                self::assertStringNotContainsString('[Diagnostics]', $native['stdout'] . $native['stderr']);
+            }
+            file_put_contents($hook, '<?php error_reporting(E_ALL); trigger_error("fixture-visible-warning", E_USER_WARNING);');
+            $warning = self::$sandbox->command('target', $preview);
+            self::assertStringContainsString('fixture-visible-warning', $warning['stdout'] . $warning['stderr']);
+            self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        } finally {
+            unlink($hook);
+        }
+        $this->assertWorkspaceClean();
+    }
+
+    public function testRichImportCompletesAndKeepsPrivateDiagnosticReportOutsideThePackage(): void
+    {
+        self::$sandbox->exportPackage();
+        $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
+        $bootstrap = self::$sandbox->root . '/target/wp-content/plugins/rrze-cli/migration-bootstrap.php';
+        $hook = self::$sandbox->root . '/import-diagnostics.php';
+        file_put_contents($hook, '<?php error_reporting(E_ALL); trigger_error("fixture-sensitive-deprecation-body", E_USER_DEPRECATED);');
+        try {
+            $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import', '--require=' . $bootstrap, '--require=' . $hook], [
+                ['Private migration directory', ["\n"]],
+                ['Import package', ["\n"]],
+                ['ZIP package (relative', ['fixture.zip', "\n"]],
+                ['New destination URL', ['http://target.test/rich-import/', "\n"]],
+                ['Post meta keys', ["\n"]],
+                ['Next action', ["\e[B", "\n"]],
+                ['Type that complete URL', ['http://target.test/rich-import/', "\n"]],
+                ['Create the new website', ['y', "\n"]],
+            ], true);
+            self::assertSame(0, $result['code'], $result['stdout']);
+            self::assertSame(8, $result['answers']);
+            $id = $this->runId($result);
+            $status = $this->runStatus($id);
+            self::assertSame('completed', $status['observed_status']);
+            self::assertStringContainsString('✓', $result['stdout']);
+            self::assertStringContainsString('Private diagnostic report:', $result['stdout']);
+            $reports = glob(self::$sandbox->root . '/runs-target/' . $id . '/diagnostics-*.json');
+            self::assertCount(1, $reports);
+            self::assertSame(0600, fileperms($reports[0]) & 0777);
+            $report = file_get_contents($reports[0]);
+            self::assertStringNotContainsString('fixture-sensitive-deprecation-body', $report);
+            self::assertFalse(json_decode($report, true, 512, JSON_THROW_ON_ERROR)['message_bodies_recorded']);
+            self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
+        } finally {
+            unlink($hook);
+        }
+        $this->assertWorkspaceClean();
     }
 
     private function runId(array $result): string

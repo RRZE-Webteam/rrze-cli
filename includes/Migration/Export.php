@@ -82,6 +82,7 @@ class Export extends Command
                 throw new RuntimeException('Export cancelled. No output file was created.');
             }
             PackageStorage::root(['run-dir' => $root], true);
+            Diagnostics::destination($root);
             PackageStorage::reserveExport($output);
             $reserved = true;
             foreach ($excluded as $directory) {
@@ -94,18 +95,17 @@ class Export extends Command
                 'blog_id' => get_current_blog_id(), 'tables' => $tables, 'uploads_included' => isset($assoc_args['uploads']),
                 'excluded_upload_directories' => $excluded,
             ];
-            WP_CLI::log('Exporting users and site tables...');
-            $this->write_tables($workspace . '/tables.sql', $tables);
+            Console::get()->step('Exporting site tables...', fn () => $this->write_tables($workspace . '/tables.sql', $tables));
             // Use the exported rows so changes during export cannot silently omit an author.
             Files::memory(filesize($workspace . '/tables.sql') * 6 + 16777216);
             $references = Sql::userReferences(file_get_contents($workspace . '/tables.sql'), $wpdb->prefix);
-            $this->write_users($workspace . '/users.csv', $references);
+            Console::get()->step('Exporting members and referenced accounts...', fn () => $this->write_users($workspace . '/users.csv', $references));
             Users::requireReferences($references, Users::read($workspace . '/users.csv'));
             $files = ['users.csv' => $workspace . '/users.csv', 'tables.sql' => $workspace . '/tables.sql'];
             if ($uploads !== null && is_dir($uploads['basedir'])) {
                 $files['wp-content/uploads'] = $uploads['basedir'];
             }
-            Package::write($output, $files, $meta, $workspace);
+            Console::get()->step('Creating and checking the migration package...', fn () => Package::write($output, $files, $meta, $workspace));
             if (!chmod($output, 0600)) {
                 throw new RuntimeException('Cannot secure the exported package permissions.');
             }
@@ -126,8 +126,9 @@ class Export extends Command
             }
         }
         if ($error !== null) {
-            WP_CLI::error($error);
+            Console::get()->failure($error, export: true);
         }
+        Diagnostics::destination(dirname($output));
         WP_CLI::success('Private migration package created: ' . Terminal::safe($output));
     }
 

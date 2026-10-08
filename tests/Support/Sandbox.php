@@ -159,6 +159,7 @@ final class Sandbox
                 self::copyDirectory($this->repository . '/' . $folder, $plugin . '/' . $folder);
             }
             copy($this->repository . '/rrze-cli.php', $plugin . '/rrze-cli.php');
+            copy($this->repository . '/migration-bootstrap.php', $plugin . '/migration-bootstrap.php');
             $this->wp($name, ['plugin', 'activate', 'rrze-cli', ...($name === 'single' ? [] : ['--network'])]);
             if ($name === 'single') {
                 $this->wp($name, ['theme', 'activate', 'rrze-test']);
@@ -203,7 +204,7 @@ final class Sandbox
         ], $path, $this->environment);
     }
 
-    public function terminal(string $installation, array $arguments, array $dialogue): array
+    public function terminal(string $installation, array $arguments, array $dialogue, bool $rich = false): array
     {
         $this->assertOwned();
         if (!in_array($installation, ['source', 'target', 'single'], true)) {
@@ -211,8 +212,8 @@ final class Sandbox
         }
         $path = $this->root . '/' . $installation;
         $result = Process::terminal([
-            $this->php, '-d', 'display_errors=stderr', $this->wpCli, '--path=' . $path, '--skip-packages', '--no-color', ...$arguments,
-        ], $path, $this->environment, $dialogue);
+            $this->php, '-d', 'display_errors=stderr', $this->wpCli, '--path=' . $path, '--skip-packages', $rich ? '--color' : '--no-color', ...$arguments,
+        ], $path, ['TERM' => 'xterm', 'COLUMNS' => '120', 'LINES' => '40'] + $this->environment, $dialogue);
         file_put_contents($this->root . '/commands.log', implode(' ', $arguments) . "\nexit=" . $result['code'] . "\n" . $result['stdout'] . $result['stderr'] . "\n", FILE_APPEND);
         return $result;
     }

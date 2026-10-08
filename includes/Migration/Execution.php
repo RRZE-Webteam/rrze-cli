@@ -48,7 +48,7 @@ final class Execution
             $guard();
         }
         $this->run->begin($name);
-        \WP_CLI::log(match ($name) {
+        $message = match ($name) {
             'recheck' => 'Rechecking the destination under the migration lock...',
             'create_site' => 'Creating the new destination website...',
             'import_tables' => 'Importing site tables...',
@@ -60,21 +60,23 @@ final class Execution
             'finalize' => 'Updating the new website rewrite rules...',
             'verify' => 'Verifying the imported website and protected user accounts...',
             default => 'Migration step: ' . $name,
+        };
+        return Console::get()->step($message, function () use ($name, $action, $guard): mixed {
+            do_action('rrze_migration_before_step', $name, $this->run->id);
+            $this->assertOwned();
+            if ($guard) {
+                $guard();
+            }
+            $result = $action();
+            $this->assertOwned();
+            if ($guard) {
+                $guard();
+            }
+            do_action('rrze_migration_after_step', $name, $this->run->id);
+            $this->assertOwned();
+            $this->run->done();
+            return $result;
         });
-        do_action('rrze_migration_before_step', $name, $this->run->id);
-        $this->assertOwned();
-        if ($guard) {
-            $guard();
-        }
-        $result = $action();
-        $this->assertOwned();
-        if ($guard) {
-            $guard();
-        }
-        do_action('rrze_migration_after_step', $name, $this->run->id);
-        $this->assertOwned();
-        $this->run->done();
-        return $result;
     }
 
     public function cancelled(): bool

@@ -100,7 +100,13 @@ final class Process
                         if (is_callable($answer)) {
                             $answer = $answer($process);
                         }
-                        if ($answer !== null) {
+                        if (is_array($answer)) {
+                            // Raw key chunks for interactive renderers; Enter is explicit.
+                            foreach ($answer as $keys) {
+                                fwrite($pipes[0], $keys);
+                                usleep(75000);
+                            }
+                        } elseif ($answer !== null) {
                             fwrite($pipes[0], $answer . "\n");
                         }
                         $next++;

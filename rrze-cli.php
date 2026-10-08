@@ -21,6 +21,7 @@ defined('ABSPATH') || exit;
 
 // Composer autoloader
 require_once 'vendor/autoload.php';
+Migration\Diagnostics::boot();
 
 // Register activation hook for the plugin
 register_activation_hook(__FILE__, __NAMESPACE__ . '\activation');

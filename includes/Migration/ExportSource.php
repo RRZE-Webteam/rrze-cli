@@ -46,6 +46,11 @@ final class ExportSource
         }
         $options['site-id'] = $source['id'];
         $options['url'] = $source['routing_url'];
+        // WP-CLI serializes the inherited false value as --color=''. Preserve the
+        // explicit negative flag so a context switch cannot change prompt mode.
+        if (WP_CLI::get_config('color') === false) {
+            $options['no-color'] = true;
+        }
         return $command . ' ' . implode(' ', array_map('escapeshellarg', $args)) . WP_CLI\Utils\assoc_args_to_str($options);
     }
 }

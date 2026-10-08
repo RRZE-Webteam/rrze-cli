@@ -52,6 +52,9 @@ class Import extends Command
         $execution = null;
         $dryRun = isset($assoc_args['dry-run']);
         $error = null;
+        if ($this->review === null && $this->withoutUploads === null) {
+            Console::configure(false, isset($assoc_args['verbose']));
+        }
         try {
             if (isset($assoc_args['mysql-single-transaction'])) {
                 throw new RuntimeException('--mysql-single-transaction cannot make a migration with DDL atomic and is no longer supported.');
@@ -63,6 +66,7 @@ class Import extends Command
             if (!$dryRun) {
                 $root = PackageStorage::root($assoc_args, true);
                 $run = Run::create($root);
+                Diagnostics::destination($run->directory);
                 WP_CLI::log('Migration run: ' . $run->id);
                 $run->begin('prepare');
                 $filename = $run->package($filename);
@@ -198,13 +202,7 @@ class Import extends Command
             }
         }
         if ($error !== null) {
-            if ($blogId !== null) {
-                $error .= ' New site ID ' . $blogId . ' may be incomplete. Inspect it and delete it manually in Network Admin before retrying; it was not automatically removed.';
-            }
-            if ($run !== null) {
-                $error .= ' Run ID: ' . $run->id . '. Read its status before recovery.';
-            }
-            WP_CLI::error($error);
+            Console::get()->failure($error, $blogId, $run?->id);
         }
         if ($dryRun) {
             if ($format === 'json') {
@@ -222,9 +220,7 @@ class Import extends Command
 
     private static function show_plan(array $plan): void
     {
-        foreach (Plan::lines($plan) as $line) {
-            WP_CLI::log(Terminal::safe($line));
-        }
+        Console::get()->plan($plan);
     }
 
     /** Direct imports are disabled; only import all can establish ownership of a new site. */
