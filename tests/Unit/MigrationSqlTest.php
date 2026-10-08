@@ -8,6 +8,63 @@ use RRZE\CLI\Migration\Sql;
 
 final class MigrationSqlTest extends TestCase
 {
+    public function testUserReferencesFollowSchemaAndExplicitColumnOrderWithoutReadingQuotedContent(): void
+    {
+        $sql = <<<'SQL'
+CREATE TABLE `src_posts` (`ID` bigint, `post_content` text, `post_author` bigint, PRIMARY KEY (`ID`));
+CREATE TABLE `src_comments` (`user_id` bigint, `comment_content` text);
+INSERT INTO `src_posts` VALUES (1,'Fake: ),(1,evil,999); INSERT INTO `src_comments` VALUES (888,\'x\');',35),(2,'it''s "(),"',0),(3,'escaped \\ slash',35);
+INSERT INTO `src_posts` (`post_author`, `ID`, `post_content`) VALUES ('21',4,'content');
+-- INSERT INTO `src_posts` VALUES (1,'not data',777);
+INSERT INTO `src_comments` VALUES (4,'comment'),(0,'anonymous');
+SQL;
+        self::assertSame([4, 21, 35], Sql::userReferences($sql, 'src_'));
+    }
+
+    public function testEmptyCoreTablesHaveNoUserReferences(): void
+    {
+        self::assertSame([], Sql::userReferences('CREATE TABLE `src_posts` (`post_author` bigint); CREATE TABLE `src_comments` (`user_id` bigint);', 'src_'));
+    }
+
+    #[DataProvider('unsupportedUserRows')]
+    public function testAmbiguousUserReferenceRowsFailClosed(string $insert): void
+    {
+        $sql = 'CREATE TABLE `src_posts` (`post_author` bigint, `content` text); CREATE TABLE `src_comments` (`user_id` bigint);' . $insert;
+        $this->expectException(RuntimeException::class);
+        Sql::userReferences($sql, 'src_');
+    }
+
+    public static function unsupportedUserRows(): array
+    {
+        return array_map(static fn ($sql) => [$sql], [
+            "INSERT INTO `src_posts` VALUES (-1,'x');",
+            "INSERT INTO `src_posts` VALUES (NULL,'x');",
+            "INSERT INTO `src_posts` VALUES (1+2,'x');",
+            "INSERT INTO `src_posts` VALUES (18446744073709551615,'x');",
+            "INSERT INTO `src_posts` VALUES (1);",
+            "INSERT INTO `src_posts` VALUES (1,'x'",
+            "INSERT INTO `src_posts` VALUES (1,'x') ON DUPLICATE KEY UPDATE post_author=2;",
+            "INSERT INTO `src_posts` (`content`) VALUES ('x');",
+            "INSERT INTO `src_posts` (`post_author`, `post_author`) VALUES (1,2);",
+            "INSERT INTO `src_posts` (`post_author`, `unknown`) VALUES (1,2);",
+            "INSERT INTO `src_posts` (post_author, content) VALUES (1,'x');",
+            "INSERT INTO `src_posts` SELECT 1, 'x';",
+        ]);
+    }
+
+    public function testLargeContentDoesNotExhaustUserReferenceInspectionLimits(): void
+    {
+        $limit = ini_get('pcre.backtrack_limit');
+        ini_set('pcre.backtrack_limit', '10000');
+        try {
+            $sql = 'CREATE TABLE `src_posts` (`post_author` bigint, `content` text); CREATE TABLE `src_comments` (`user_id` bigint);';
+            $sql .= "INSERT INTO `src_posts` VALUES (35,'" . str_repeat('comma, and ),( fake ', 100000) . "'),(4,'end');";
+            self::assertSame([4, 35], Sql::userReferences($sql, 'src_'));
+        } finally {
+            ini_set('pcre.backtrack_limit', $limit);
+        }
+    }
+
     #[DataProvider('jitModes')]
     public function testLargeValuesArePreservedWithLowRegexLimits(string $jit): void
     {

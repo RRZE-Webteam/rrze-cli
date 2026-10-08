@@ -21,6 +21,7 @@ final class Preflight
         $target = SiteAddress::parse($options['new_url'] ?? $meta['url']);
         $tables = self::tables($workspace . '/tables.sql', $meta);
         $users = Users::plan(Users::read($workspace . '/users.csv'));
+        Users::requireReferences(Sql::userReferences(file_get_contents($workspace . '/tables.sql'), $meta['db_prefix']), $users);
         $fields = array_values(array_unique(array_filter(array_map('trim', explode(',', $options['uid_fields'] ?? '')))));
         foreach ($fields as $field) {
             if (!preg_match('/^[A-Za-z0-9_.-]+$/D', $field)) {
@@ -46,7 +47,8 @@ final class Preflight
             'destination_details' => $destination, 'tables' => $mapping,
             'users' => array_map(static fn ($row) => [
                 'source_id' => (int) $row['ID'], 'login' => $row['user_login'], 'role' => $row['role'],
-                'action' => $row['target_id'] === null ? 'create_wordpress_user' : 'add_site_membership',
+                'site_member' => Users::isMember($row),
+                'action' => $row['target_id'] === null ? 'create_wordpress_user' : (Users::isMember($row) ? 'add_site_membership' : 'map_existing_user'),
                 'target_id' => $row['target_id'],
             ], $users),
             'uploads' => ['included' => $meta['uploads_included'], 'skipped' => $skipUploads,

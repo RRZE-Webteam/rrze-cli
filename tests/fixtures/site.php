@@ -149,6 +149,11 @@ $result = match ($action) {
                     }
                 }
             }
+            if ($table === $wpdb->sitemeta) {
+                foreach ($rows as $row) {
+                    $result[$table . ':' . $row['meta_key']] = hash('sha256', wp_json_encode($row));
+                }
+            }
         }
         return $result;
     })(),
@@ -166,6 +171,34 @@ $result = match ($action) {
     'lookup-user' => (function () use ($args) {
         $user = get_user_by('login', $args[1]);
         return $user ? ['id' => $user->ID, 'row_hash' => hash('sha256', wp_json_encode($user->data))] : [];
+    })(),
+    'reference-source' => (function () {
+        $site = wp_insert_site(['domain' => 'source.test', 'path' => '/references/', 'network_id' => 1]);
+        $existing = get_user_by('login', 'sso0001')->ID;
+        $new = rrze_test_user('reference01', 'reference01@company.example');
+        add_user_to_blog($site, get_user_by('login', 'sso0002')->ID, 'author');
+        switch_to_blog($site);
+        switch_theme('rrze-test');
+        (new WP_User($new, '', $site))->set_role('');
+        $posts = [];
+        foreach (['existing-reference' => $existing, 'new-reference' => $new] as $slug => $author) {
+            $post = wp_insert_post(['post_type' => 'post', 'post_status' => 'publish', 'post_name' => $slug, 'post_title' => $slug, 'post_author' => $author]);
+            wp_insert_comment(['comment_post_ID' => $post, 'user_id' => $author, 'comment_content' => $slug]);
+            $posts[$slug] = $post;
+        }
+        wp_insert_comment(['comment_post_ID' => $post, 'user_id' => 0, 'comment_content' => 'anonymous']);
+        restore_current_blog();
+        return ['site' => (int) $site, 'existing' => $existing, 'new' => $new, 'posts' => $posts];
+    })(),
+    'reference-content' => (function () use ($args) {
+        global $wpdb;
+        switch_to_blog((int) $args[1]);
+        $result = [
+            'posts' => $wpdb->get_results("SELECT post_name, post_author FROM {$wpdb->posts} WHERE post_name IN ('existing-reference', 'new-reference') ORDER BY post_name", ARRAY_A),
+            'comments' => $wpdb->get_results("SELECT comment_content, user_id FROM {$wpdb->comments} WHERE comment_content IN ('existing-reference', 'new-reference', 'anonymous') ORDER BY comment_content", ARRAY_A),
+        ];
+        restore_current_blog();
+        return $result;
     })(),
     'leftover' => (function () use ($args) {
         global $wpdb;

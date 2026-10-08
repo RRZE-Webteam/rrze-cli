@@ -100,6 +100,9 @@ final class MigrationPolicyTest extends TestCase
         yield 'invalid ID' => [$header . "0,sso1,sso1@company.example,editor\n"];
         yield 'invalid email' => [$header . "1,sso1,invalid,editor\n"];
         yield 'missing role' => [$header . "1,sso1,sso1@company.example,\n"];
+        yield 'reference only with role' => ["ID,user_login,user_email,role,site_member\n1,sso1,sso1@company.example,editor,0\n"];
+        yield 'member without role' => ["ID,user_login,user_email,role,site_member\n1,sso1,sso1@company.example,,1\n"];
+        yield 'invalid membership flag' => ["ID,user_login,user_email,role,site_member\n1,sso1,sso1@company.example,editor,yes\n"];
         yield 'duplicate ID' => [$header . "1,sso1,sso1@company.example,editor\n1,sso2,sso2@company.example,author\n"];
         yield 'duplicate login case' => [$header . "1,sso1,sso1@company.example,editor\n2,SSO1,sso2@company.example,author\n"];
         yield 'duplicate email' => [$header . "1,sso1,sso1@company.example,editor\n2,sso2,sso1@company.example,author\n"];
@@ -111,6 +114,23 @@ final class MigrationPolicyTest extends TestCase
         try {
             file_put_contents($file, "ID,user_login,user_email,role,user_pass,user_activation_key,session_tokens,_application_passwords,wp_capabilities\n21,sso1,sso1@company.example,author,secret,secret,secret,secret,secret\n");
             self::assertSame([['ID' => '21', 'user_login' => 'sso1', 'user_email' => 'sso1@company.example', 'role' => 'author']], Users::read($file));
+        } finally {
+            unlink($file);
+        }
+    }
+
+    public function testReferenceOnlyCsvRequiresAnExplicitMembershipFlagAndNoRole(): void
+    {
+        $file = tempnam(sys_get_temp_dir(), 'rrze-csv-');
+        try {
+            file_put_contents($file, "ID,user_login,user_email,role,site_member\n35,reference01,reference01@company.example,,0\n");
+            $rows = Users::read($file);
+            self::assertFalse(Users::isMember($rows[0]));
+            self::assertSame('', $rows[0]['role']);
+            self::assertTrue(Users::isMember(['role' => 'editor']));
+            Users::requireReferences([0, 35], $rows);
+            $this->expectExceptionMessage('source user ID 36');
+            Users::requireReferences([35, 36], $rows);
         } finally {
             unlink($file);
         }

@@ -90,6 +90,117 @@ final class Sql
         return $matches[1];
     }
 
+    /** Read core user IDs from controlled mysqldump rows, without executing the dump. */
+    public static function userReferences(string $sql, string $prefix): array
+    {
+        $structure = self::structure($sql);
+        $ids = [];
+        foreach (['posts' => 'post_author', 'comments' => 'user_id'] as $suffix => $column) {
+            $table = preg_quote($prefix . $suffix, '/');
+            if (preg_match_all('/\bCREATE TABLE(?: IF NOT EXISTS)?\s+`' . $table . '`\s*(?=\()/i', $structure, $definitions, PREG_OFFSET_CAPTURE) !== 1) {
+                throw new RuntimeException('Cannot inspect the SQL schema for core user references.');
+            }
+            [$definition, $position] = $definitions[0][0];
+            $position += strlen($definition);
+            $columns = [];
+            foreach (self::tuple($structure, $position) as [$start, $length]) {
+                if (preg_match('/^\s*`([A-Za-z0-9_]+)`\s+/', substr($structure, $start, $length), $match)) {
+                    $columns[] = $match[1];
+                }
+            }
+            if (!in_array($column, $columns, true)) {
+                throw new RuntimeException('The SQL schema is missing a core user-reference column.');
+            }
+            if (preg_match_all('/\bINSERT\s+INTO\s+`' . $table . '`(?=\s|\()/i', $structure, $inserts, PREG_OFFSET_CAPTURE) === false) {
+                throw new RuntimeException('Cannot inspect SQL inserts for core user references.');
+            }
+            foreach ($inserts[0] as [$insert, $position]) {
+                $position += strlen($insert);
+                self::whitespace($structure, $position);
+                $order = $columns;
+                if (($structure[$position] ?? '') === '(') {
+                    $order = [];
+                    foreach (self::tuple($structure, $position) as [$start, $length]) {
+                        if (!preg_match('/^\s*`([A-Za-z0-9_]+)`\s*$/D', substr($structure, $start, $length), $match)) {
+                            throw new RuntimeException('Unsupported SQL column list for core user references.');
+                        }
+                        $order[] = $match[1];
+                    }
+                }
+                $index = array_search($column, $order, true);
+                self::whitespace($structure, $position);
+                if ($index === false || count($order) !== count(array_unique($order)) || array_diff($order, $columns)
+                    || preg_match('/\GVALUES\b\s*/i', $structure, $match, 0, $position) !== 1) {
+                    throw new RuntimeException('Unsupported SQL insert for core user references.');
+                }
+                $position += strlen($match[0]);
+                do {
+                    $values = self::tuple($structure, $position);
+                    if (count($values) !== count($order)) {
+                        throw new RuntimeException('SQL row length does not match its user-reference schema.');
+                    }
+                    [$start, $length] = $values[$index];
+                    $value = trim(substr($sql, $start, $length));
+                    if (!preg_match('/^(?:[0-9]+|\'[0-9]+\'|"[0-9]+")$/D', $value)) {
+                        throw new RuntimeException('A core SQL user reference is not a supported numeric ID.');
+                    }
+                    $value = ltrim(trim($value, '\'"'), '0');
+                    $id = (int) $value;
+                    if ($value !== '' && (string) $id !== $value) {
+                        throw new RuntimeException('A core SQL user reference exceeds the supported ID range.');
+                    }
+                    if ($id > 0) {
+                        $ids[$id] = $id;
+                    }
+                    self::whitespace($structure, $position);
+                    $separator = $structure[$position++] ?? '';
+                    self::whitespace($structure, $position);
+                } while ($separator === ',');
+                if ($separator !== ';') {
+                    throw new RuntimeException('Unsupported SQL row terminator for core user references.');
+                }
+            }
+        }
+        sort($ids, SORT_NUMERIC);
+        return $ids;
+    }
+
+    /** Byte spans of comma-separated items; quoted values were already masked. */
+    private static function tuple(string $structure, int &$position): array
+    {
+        if (($structure[$position] ?? '') !== '(') {
+            throw new RuntimeException('Expected a SQL tuple while inspecting core user references.');
+        }
+        $length = strlen($structure);
+        $start = ++$position;
+        $depth = 1;
+        $parts = [];
+        while ($position < $length) {
+            $position += strcspn($structure, '(),', $position);
+            $token = $structure[$position] ?? '';
+            if ($token === '(' && ++$depth > 32) {
+                throw new RuntimeException('SQL tuple nesting exceeds the inspection limit.');
+            }
+            if ($token === ')') {
+                $depth--;
+            }
+            if ($depth === 0 || ($token === ',' && $depth === 1)) {
+                $parts[] = [$start, $position - $start];
+                $start = $position + 1;
+            }
+            $position++;
+            if ($depth === 0) {
+                return $parts;
+            }
+        }
+        throw new RuntimeException('Unterminated SQL tuple while inspecting core user references.');
+    }
+
+    private static function whitespace(string $structure, int &$position): void
+    {
+        $position += strspn($structure, " \t\r\n", $position);
+    }
+
     public static function map(string $sql, array $mapping): string
     {
         if (preg_match_all('/\b(?:DROP TABLE IF EXISTS|CREATE TABLE(?: IF NOT EXISTS)?|LOCK TABLES|INSERT INTO|ALTER TABLE|REFERENCES)\s+`([^`]+)`/i', self::structure($sql), $matches, PREG_OFFSET_CAPTURE) === false) {

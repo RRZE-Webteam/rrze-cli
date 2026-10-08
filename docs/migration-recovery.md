@@ -75,6 +75,26 @@ wp rrze-migration import all /srv/private/rrze-migrations/RUN_ID/package.zip \
 
 `_fixture_user` ist ein Testbeispiel und durch tatsächlich verwendete numerische Benutzerreferenzen zu ersetzen oder wegzulassen. Ein vorhandenes Ziel blockiert auch diesen Wiederherstellungsweg. Es gibt keinen `resume`-, `force`- oder Überschreibschalter.
 
+## Konflikt beim Zuordnen der Rollenoption
+
+Die Meldung `Could not map the new site role option` konnte bisher bei `configure_site` auftreten, wenn bereits zwei Rollenoptionen in der neu importierten Options-Tabelle vorhanden waren: der Quellschlüssel wie `wp_2_user_roles` und der neue Zielschlüssel wie `wp_10_user_roles`. Plugins können den Zielschlüssel beim Start eines WP-CLI-Unterprozesses für die URL-Ersetzung anlegen. Das bisherige Umbenennen des Quellschlüssels scheiterte dann am eindeutigen Optionsnamen.
+
+Der Import übernimmt die exportierten Rollendefinitionen jetzt ausdrücklich unter dem Zielschlüssel, auch wenn dieser bereits existiert. Wert und Autoload-Einstellung werden geprüft, bevor der alte Schlüssel entfernt wird; anschließend werden Options-Cache und Rollenobjekt aktualisiert. Diese Änderung betrifft ausschließlich die Options-Tabelle der vom Lauf neu angelegten und geprüften Website. Gleichnamige Quell- und Zielschlüssel bleiben erhalten. Fehlt die Quelloption oder enthält sie kein nichtleeres serialisiertes Rollenarray, bricht der Import ab, statt auf zwischenzeitlich erzeugte Plugin-Rollen auszuweichen.
+
+Ein bereits fehlgeschlagener Lauf wird dadurch nicht nachträglich fertiggestellt. Den Status prüfen, die unvollständige Website wie oben beschrieben manuell löschen und mit der korrigierten Version zunächst die Vorschau, danach einen neuen Import starten. Ein gültiges, unverändertes Exportpaket kann für diesen Fehler weiterverwendet werden. Globale Benutzer und die Rollen anderer Websites werden nicht repariert oder zurückgesetzt.
+
+## Fehlender Benutzer für Beiträge oder Kommentare
+
+`The package is missing a user referenced by a post or comment` konnte bisher erst bei `remap_references` auftreten. Der Export nahm nur aktuelle Website-Mitglieder auf; Inhalte können aber weiterhin auf ein bestehendes Netzwerkkonto ohne Mitgliedschaft verweisen. Das betrifft beispielsweise frühere Autoren oder angemeldete Kommentierende.
+
+Vollständige Exporte enthalten jetzt zusätzlich die Konten aller von `posts.post_author` und `comments.user_id` referenzierten Benutzer. Die IDs werden aus dem tatsächlich erzeugten SQL-Dump gelesen. Solche zusätzlichen CSV-Zeilen haben `site_member=0` und eine leere Rolle. Der Import ordnet sie wie Mitglieder über SSO-Kennung und Firmenadresse zu, erteilt ihnen aber keine Website-Mitgliedschaft. Bestehende Konten bleiben vollständig unverändert; fehlende Konten erhalten ein zufälliges lokales Passwort und keine Website-Rolle. Die Vorschau kennzeichnet sie als `reference only; no site membership`. Anonyme Referenzen mit ID `0` bleiben unverändert. Der separate Rohbefehl `export users` exportiert weiterhin nur Website-Mitglieder.
+
+Die Vorprüfung gleicht diese beiden Kernreferenzen im kontrollierten SQL-Dump mit der Benutzerliste ab, auch bei älteren Paketen ohne `site_member`-Spalte. Fehlt eine Identität, bricht sie vor der Website-Anlage mit deren Quell-ID ab. Der Export bricht ebenfalls ab, wenn das referenzierte Konto in der Quelle bereits gelöscht wurde. Solche verwaisten Referenzen müssen fachlich in der Quelle geklärt werden; eine numerisch identische Ziel-ID oder eine E-Mail aus dem Kommentar ersetzt keine SSO-Identität. Optionale `--uid_fields` und Benutzerverweise in Erweiterungstabellen werden durch diese Kernprüfung nicht zusätzlich erfasst.
+
+Leere WordPress-Capabilities-Metadaten ohne Rolle werden nicht als zu übertragende Rollenzuordnung behandelt. Diese Konten werden ebenfalls nur bei einer Inhaltsreferenz und ohne Zielmitgliedschaft aufgenommen; die leeren Metadaten in der Quelle bleiben unverändert.
+
+Bei einem bereits fehlgeschlagenen Lauf zuerst den Status lesen, anschließend die unvollständige neue Website prüfen und manuell in Network Admin löschen. Globale Konten erhalten. **Danach mit der korrigierten Version neu exportieren**, das neue Paket in der Vorschau prüfen und frisch importieren. Das alte ZIP und seine aufbewahrte Laufkopie enthalten die fehlende Identität weiterhin nicht; die Codekorrektur ergänzt sie nicht nachträglich.
+
 ## Grenzen und Betriebsabnahme
 
 Bei verfügbarem PCNTL fordert `SIGINT` oder `SIGTERM` einen Abbruch an einer geprüften Grenze an. Ein laufender Datenbankbefehl muss zunächst zurückkehren; der Vorgang wird nicht als atomar rückgängig gemacht. Ohne PCNTL oder bei `SIGKILL`, Stromausfall und ähnlichen Abbrüchen bleibt gegebenenfalls nur der letzte Checkpoint.

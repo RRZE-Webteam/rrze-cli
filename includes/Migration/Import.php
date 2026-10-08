@@ -264,11 +264,12 @@ class Import extends Command
         global $wpdb;
         switch_to_blog($blogId);
         try {
-            if ($wpdb->update($wpdb->options, ['option_name' => $wpdb->prefix . 'user_roles'], ['option_name' => $meta['db_prefix'] . 'user_roles']) === false) {
-                throw new RuntimeException('Could not map the new site role option.');
-            }
+            $this->map_roles($meta['db_prefix'], $blogId);
             wp_cache_delete('alloptions', 'options');
             wp_cache_delete('notoptions', 'options');
+            wp_cache_delete($meta['db_prefix'] . 'user_roles', 'options');
+            wp_cache_delete($wpdb->prefix . 'user_roles', 'options');
+            wp_roles()->for_site($blogId);
             foreach (['upload_path', 'upload_url_path'] as $option) {
                 update_option($option, '');
                 if (get_option($option) !== '') {
@@ -287,8 +288,49 @@ class Import extends Command
         Utils::checked_command('transient delete', [], ['all' => true], ['url' => $target['url']]);
     }
 
+    /** Called only within the ownership-guarded configure_site step of a newly created site. */
+    private function map_roles(string $sourcePrefix, int $blogId): void
+    {
+        global $wpdb;
+        $targetPrefix = $wpdb->get_blog_prefix($blogId);
+        $table = $targetPrefix . 'options';
+        $sourceKey = $sourcePrefix . 'user_roles';
+        $targetKey = $targetPrefix . 'user_roles';
+        // Read the imported option directly, without stale caches or option filters.
+        $source = $wpdb->get_row($wpdb->prepare("SELECT option_value, autoload FROM `$table` WHERE option_name = %s", $sourceKey), ARRAY_A);
+        if ($wpdb->last_error || $source === null) {
+            throw new RuntimeException('The imported source role option is missing or could not be read.');
+        }
+        $roles = @unserialize($source['option_value'], ['allowed_classes' => false]);
+        if (!is_array($roles) || !$roles) {
+            throw new RuntimeException('The imported source role option must contain a nonempty serialized role array.');
+        }
+        if ($sourceKey === $targetKey) {
+            return;
+        }
+        // Plugins booted by search-replace may already have created the target key. The
+        // imported definitions are authoritative for this new site; avoid a duplicate-key rename.
+        $copied = $wpdb->query($wpdb->prepare(
+            "INSERT INTO `$table` (option_name, option_value, autoload)
+             SELECT %s, option_value, autoload FROM `$table` WHERE option_name = %s
+             ON DUPLICATE KEY UPDATE option_value = VALUES(option_value), autoload = VALUES(autoload)",
+            $targetKey, $sourceKey
+        ));
+        if ($copied === false) {
+            throw new RuntimeException('Could not copy the imported role option to the new site key.');
+        }
+        $target = $wpdb->get_row($wpdb->prepare("SELECT option_value, autoload FROM `$table` WHERE option_name = %s", $targetKey), ARRAY_A);
+        if ($wpdb->last_error || $target !== $source) {
+            throw new RuntimeException('The new site role option does not match the imported definitions.');
+        }
+        if ($wpdb->delete($table, ['option_name' => $sourceKey]) === false) {
+            throw new RuntimeException('Could not remove the old role option key from the new site.');
+        }
+    }
+
     private function import_users(array $plan, int $blogId, Execution $execution): array
     {
+        global $wpdb;
         // Re-check the whole identity plan immediately before writing any users.
         $plan = Users::plan($plan);
         $ids = [];
@@ -301,21 +343,28 @@ class Import extends Command
                 $id = $row['target_id'];
                 $created = $id === null;
                 if ($id === null) {
-                    $data = array_intersect_key($row, array_flip(array_diff(Users::HEADERS, ['ID'])));
+                    $data = array_intersect_key($row, array_flip(array_diff(Users::HEADERS, ['ID', 'site_member'])));
                     $data['user_pass'] = wp_generate_password(64, true, true);
                     $id = wp_insert_user($data);
                     if (is_wp_error($id)) {
                         throw new RuntimeException('Could not create a WordPress user for an SSO identity.');
                     }
-                } else {
+                } elseif (Users::isMember($row)) {
                     // Unlike add_user_to_blog(), this does not change primary_blog/source_domain.
                     $user = new \WP_User($id, '', $blogId);
                     $user->set_role($row['role']);
                 }
                 $execution->run->user((int) $row['ID'], (int) $id, $created);
+                if ($created && !Users::isMember($row)) {
+                    // wp_insert_user(role: '') still writes empty membership keys. Only remove
+                    // those keys for this newly created account and the owned destination site.
+                    delete_user_meta($id, $wpdb->prefix . 'capabilities');
+                    delete_user_meta($id, $wpdb->prefix . 'user_level');
+                }
                 $user = new \WP_User($id, '', $blogId);
-                if (!in_array($row['role'], $user->roles, true)) {
-                    throw new RuntimeException('Could not assign the user role on the new site.');
+                if (Users::isMember($row) ? !in_array($row['role'], $user->roles, true)
+                    : metadata_exists('user', $id, $wpdb->prefix . 'capabilities') || metadata_exists('user', $id, $wpdb->prefix . 'user_level')) {
+                    throw new RuntimeException('Could not preserve the user membership on the new site.');
                 }
                 $ids[(int) $row['ID']] = (int) $id;
             }

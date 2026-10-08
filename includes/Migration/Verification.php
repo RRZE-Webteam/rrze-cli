@@ -23,7 +23,7 @@ final class Verification
             if ($wpdb->last_error) {
                 throw new RuntimeException('Could not verify existing global user metadata.');
             }
-            if ($siteId !== null) {
+            if ($siteId !== null && Users::isMember($row)) {
                 $prefix = $wpdb->get_blog_prefix($siteId);
                 $meta = array_values(array_filter($meta, static fn ($item) => !in_array($item['meta_key'], [$prefix . 'capabilities', $prefix . 'user_level'], true)));
             }
@@ -68,7 +68,8 @@ final class Verification
             foreach ($plan['users'] as $user) {
                 $target = new \WP_User($ids[(int) $user['ID']], '', $id);
                 if ($target->user_login !== $user['user_login'] || strcasecmp($target->user_email, $user['user_email']) !== 0
-                    || !in_array($user['role'], $target->roles, true)) {
+                    || (Users::isMember($user) ? !in_array($user['role'], $target->roles, true)
+                        : metadata_exists('user', $target->ID, $wpdb->prefix . 'capabilities') || metadata_exists('user', $target->ID, $wpdb->prefix . 'user_level'))) {
                     throw new RuntimeException('Destination user or membership verification failed.');
                 }
             }

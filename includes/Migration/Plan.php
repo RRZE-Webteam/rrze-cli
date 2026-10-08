@@ -19,7 +19,8 @@ final class Plan
             $lines[] = 'Table: ' . $from . ' -> ' . $to;
         }
         foreach ($plan['users'] as $user) {
-            $lines[] = 'User: ' . $user['login'] . ' -> ' . $user['action'] . ' (' . $user['role'] . ')';
+            $membership = ($user['site_member'] ?? true) ? $user['role'] : 'reference only; no site membership';
+            $lines[] = 'User: ' . $user['login'] . ' -> ' . $user['action'] . ' (' . $membership . ')';
         }
         $lines[] = 'Numeric user-reference fields: ' . (implode(', ', $plan['user_reference_fields']) ?: 'none');
         $lines[] = 'Packaged media: ' . $plan['uploads']['files'] . ' files, ' . $plan['uploads']['bytes'] . ' bytes';

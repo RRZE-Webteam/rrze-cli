@@ -95,8 +95,12 @@ class Export extends Command
                 'excluded_upload_directories' => $excluded,
             ];
             WP_CLI::log('Exporting users and site tables...');
-            $this->write_users($workspace . '/users.csv');
             $this->write_tables($workspace . '/tables.sql', $tables);
+            // Use the exported rows so changes during export cannot silently omit an author.
+            Files::memory(filesize($workspace . '/tables.sql') * 6 + 16777216);
+            $references = Sql::userReferences(file_get_contents($workspace . '/tables.sql'), $wpdb->prefix);
+            $this->write_users($workspace . '/users.csv', $references);
+            Users::requireReferences($references, Users::read($workspace . '/users.csv'));
             $files = ['users.csv' => $workspace . '/users.csv', 'tables.sql' => $workspace . '/tables.sql'];
             if ($uploads !== null && is_dir($uploads['basedir'])) {
                 $files['wp-content/uploads'] = $uploads['basedir'];
@@ -224,8 +228,28 @@ class Export extends Command
         }
     }
 
-    private function write_users(string $filename): void
+    private function write_users(string $filename, array $references = []): void
     {
+        $users = [];
+        $members = [];
+        foreach (get_users(['blog_id' => get_current_blog_id()]) as $user) {
+            // WordPress can leave empty capabilities keys for accounts without a role.
+            // Include those accounts only when content references them, without a role grant.
+            if ($user->roles === [] && $user->caps === []) {
+                continue;
+            }
+            $users[$user->ID] = $user;
+            $members[$user->ID] = true;
+        }
+        foreach ($references as $id) {
+            if (!isset($users[$id])) {
+                $user = get_userdata($id);
+                if (!$user) {
+                    throw new RuntimeException('Cannot export source user ID ' . $id . ' referenced by a post or comment: the account no longer exists. Resolve the source reference before exporting.');
+                }
+                $users[$id] = $user;
+            }
+        }
         $headers = self::getUserCSVHeaders();
         $handle = @fopen($filename, 'wb');
         if (!$handle) {
@@ -236,10 +260,14 @@ class Export extends Command
             if (fputcsv($handle, $headers, ',', '"', '\\') === false) {
                 throw new RuntimeException('Could not write user CSV headers.');
             }
-            foreach (get_users(['blog_id' => get_current_blog_id()]) as $user) {
+            foreach ($users as $user) {
                 $row = [];
                 foreach (Users::HEADERS as $field) {
                     $row[$field] = $field === 'role' ? ($user->roles[0] ?? '') : $user->get($field);
+                }
+                $row['site_member'] = isset($members[$user->ID]) ? '1' : '0';
+                if ($row['site_member'] === '0') {
+                    $row['role'] = '';
                 }
                 // Filters may supply custom fields, but cannot rename identities or add credentials.
                 $custom = apply_filters('rrze_migration_export_user_data', [], $user);

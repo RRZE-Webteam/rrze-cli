@@ -775,6 +775,9 @@ PHPHOOK);
             self::assertSame('src_', $meta['db_prefix']);
             self::assertNotContains('src_2_posts', $meta['tables']);
             self::assertStringNotContainsString('booted-site-2', $zip->getFromName('users.csv'));
+            // Empty role metadata left on the main site is not a role-bearing membership.
+            self::assertStringNotContainsString('sso0001', $zip->getFromName('users.csv'));
+            self::assertStringNotContainsString('sso0002', $zip->getFromName('users.csv'));
             $zip->close();
             self::assertSame($before, self::$sandbox->fixture('source', 'state'));
         } finally {
@@ -1548,6 +1551,233 @@ PHPHOOK);
             unlink($sourcePublic);
             unlink($targetPublic);
         }
+    }
+
+    public function testImportedRolesReplaceAnOptionCreatedDuringTargetBootstrap(): void
+    {
+        $roles = json_decode(self::$sandbox->wp('source', ['option', 'get', 'src_2_user_roles', '--format=json', '--url=http://source.test/source/']), true, 512, JSON_THROW_ON_ERROR);
+        $roles['editor']['capabilities']['rrze_fixture_source_capability'] = true;
+        $package = $this->modifiedPackage(static function (ZipArchive $zip) use ($roles): void {
+            $sql = $zip->getFromName('tables.sql') . "\nINSERT INTO `src_2_options` (`option_name`,`option_value`,`autoload`) VALUES ('src_2_user_roles',0x"
+                . bin2hex(serialize($roles)) . ",'yes') ON DUPLICATE KEY UPDATE `option_value`=VALUES(`option_value`), `autoload`=VALUES(`autoload`);\n";
+            $zip->addFromString('tables.sql', $sql);
+        });
+        $hook = $this->roleCollisionHook();
+        $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
+        $source = self::$sandbox->fixture('source', 'state');
+        try {
+            foreach ([false, true] as $skipUploads) {
+                $users = self::$sandbox->fixture('target', 'users');
+                $url = 'http://target.test/role-collision-' . ($skipUploads ? 'manual' : 'automatic') . '/';
+                $options = $skipUploads ? ['--skip-uploads'] : [];
+                $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $package, '--new_url=' . $url, '--uid_fields=_fixture_user', ...$options]);
+                self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
+                $state = $this->runStatus($this->runId($result));
+                $id = $state['site_id'];
+                self::assertSame('completed', $state['observed_status']);
+                self::assertSame('completed', $state['steps']['configure_site']['status']);
+                self::assertSame('1', trim(self::$sandbox->wp('target', ['option', 'get', 'rrze_fixture_role_collision', '--url=' . $url])));
+                $imported = json_decode(self::$sandbox->wp('target', ['option', 'get', 'dst_' . $id . '_user_roles', '--format=json', '--url=' . $url]), true, 512, JSON_THROW_ON_ERROR);
+                self::assertSame($roles, $imported);
+                $keys = self::$sandbox->wp('target', ['db', 'query', "SELECT option_name FROM dst_{$id}_options WHERE option_name IN ('src_2_user_roles','dst_{$id}_user_roles')", '--skip-column-names']);
+                self::assertSame('dst_' . $id . '_user_roles', trim($keys));
+                $after = self::$sandbox->fixture('target', 'users');
+                foreach ($users as $userId => $before) {
+                    $current = $after[$userId];
+                    unset($current['meta']['dst_' . $id . '_capabilities'], $current['meta']['dst_' . $id . '_user_level']);
+                    self::assertSame($before, $current);
+                }
+                self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
+                self::assertSame($source, self::$sandbox->fixture('source', 'state'));
+                $this->assertWorkspaceClean();
+            }
+        } finally {
+            unlink($hook);
+        }
+    }
+
+    public function testMissingOrInvalidSourceRoleOptionsCannotUsePluginGeneratedRoles(): void
+    {
+        $hook = $this->roleCollisionHook();
+        $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
+        $users = self::$sandbox->fixture('target', 'users');
+        try {
+            foreach (['missing', 'invalid', 'empty'] as $case) {
+                $package = $this->modifiedPackage(static function (ZipArchive $zip) use ($case): void {
+                    $sql = $zip->getFromName('tables.sql');
+                    if ($case === 'missing') {
+                        $sql = str_replace("'src_2_user_roles'", "'fixture_missing_roles'", $sql);
+                    } else {
+                        $sql .= "\nINSERT INTO `src_2_options` (`option_name`,`option_value`,`autoload`) VALUES ('src_2_user_roles',0x"
+                            . bin2hex(serialize($case === 'empty' ? [] : false)) . ",'yes') ON DUPLICATE KEY UPDATE `option_value`=VALUES(`option_value`);\n";
+                    }
+                    $zip->addFromString('tables.sql', $sql);
+                });
+                $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $package, '--new_url=http://target.test/roles-' . $case . '/', '--skip-uploads']);
+                self::assertNotSame(0, $result['code']);
+                self::assertStringContainsString($case === 'missing' ? 'source role option is missing' : 'nonempty serialized role array', $result['stderr']);
+                $state = $this->runStatus($this->runId($result));
+                self::assertSame('failed', $state['observed_status']);
+                self::assertSame('configure_site', $state['failure_step']);
+                self::assertArrayNotHasKey('import_users', $state['steps']);
+                self::assertSame('completed', $state['steps']['cleanup']['status']);
+                self::assertTrue($state['package_intact']);
+                $id = $state['site_id'];
+                self::assertSame('1', trim(self::$sandbox->wp('target', ['db', 'query', "SELECT COUNT(*) FROM dst_blogs WHERE blog_id = {$id}", '--skip-column-names'])));
+                self::assertSame($users, self::$sandbox->fixture('target', 'users'));
+                self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
+                $this->assertWorkspaceClean();
+            }
+        } finally {
+            unlink($hook);
+        }
+    }
+
+    public function testMatchingSourceAndTargetRoleKeysArePreserved(): void
+    {
+        self::$sandbox->exportPackage();
+        $url = 'http://target.test/matching-role-key/';
+        $plan = json_decode(self::$sandbox->wp('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=' . $url, '--skip-uploads', '--dry-run', '--format=json']), true, 512, JSON_THROW_ON_ERROR);
+        $id = $plan['destination_details']['estimated_site_id'];
+        $prefix = 'dst_' . $id . '_';
+        $roles = json_decode(self::$sandbox->wp('source', ['option', 'get', 'src_2_user_roles', '--format=json', '--url=http://source.test/source/']), true, 512, JSON_THROW_ON_ERROR);
+        $package = $this->modifiedPackage(static function (ZipArchive $zip) use ($id, $prefix): void {
+            $meta = json_decode($zip->getFromName('site.json'), true, 512, JSON_THROW_ON_ERROR);
+            $meta['db_prefix'] = $prefix;
+            $meta['blog_id'] = $id;
+            $tables = $meta['tables'];
+            $meta['tables'] = array_map(static fn ($table) => $prefix . substr($table, strlen('src_2_')), $tables);
+            $sql = str_replace(array_map(static fn ($table) => '`' . $table . '`', $tables), array_map(static fn ($table) => '`' . $table . '`', $meta['tables']), $zip->getFromName('tables.sql'));
+            $sql = str_replace("'src_2_user_roles'", "'{$prefix}user_roles'", $sql);
+            $zip->addFromString('tables.sql', $sql);
+            $zip->addFromString('site.json', json_encode($meta, JSON_THROW_ON_ERROR));
+        });
+        $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $package, '--new_url=' . $url, '--skip-uploads']);
+        self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
+        $state = $this->runStatus($this->runId($result));
+        self::assertSame('completed', $state['observed_status']);
+        self::assertSame($id, $state['site_id']);
+        self::assertSame($roles, json_decode(self::$sandbox->wp('target', ['option', 'get', $prefix . 'user_roles', '--format=json', '--url=' . $url]), true, 512, JSON_THROW_ON_ERROR));
+        $this->assertWorkspaceClean();
+    }
+
+    private function roleCollisionHook(): string
+    {
+        $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/role-collision.php';
+        file_put_contents($hook, <<<'PHPHOOK'
+<?php
+add_action('init', static function () {
+    global $wpdb;
+    if (get_current_blog_id() > 2 && !get_option($wpdb->prefix . 'user_roles')) {
+        // A plugin booting during search-replace can recreate the new site's role option.
+        add_role('editor', 'Temporary plugin editor', ['read' => true, 'manage_options' => true]);
+        update_option('rrze_fixture_role_collision', true);
+    }
+});
+PHPHOOK);
+        return $hook;
+    }
+
+    public function testReferencedNonMembersAreExportedAndMappedWithoutGrantingMembership(): void
+    {
+        self::$sandbox->exportPackage();
+        $fixture = self::$sandbox->fixture('source', 'reference-source');
+        // Complete WordPress's first bootstrap of the new fixture site before taking a baseline.
+        self::$sandbox->wp('source', ['eval', 'return;', '--url=http://source.test/references/']);
+        $sourceBefore = self::$sandbox->fixture('source', 'state');
+        $controlBefore = self::$sandbox->fixture('target', 'snapshot', ['2']);
+        $usersBefore = self::$sandbox->fixture('target', 'users');
+        self::$sandbox->wp('source', ['rrze-migration', 'export', 'all', 'references.zip', '--url=http://source.test/references/']);
+        $exports = glob(self::$sandbox->root . '/runs-source/export-*/references.zip');
+        self::assertCount(1, $exports);
+        $path = self::$sandbox->root . '/runs-target/references.zip';
+        self::assertTrue(copy($exports[0], $path));
+        $args = ['rrze-migration', 'import', 'all', 'references.zip', '--new_url=http://target.test/references/'];
+        $plan = json_decode(self::$sandbox->wp('target', [...$args, '--dry-run', '--format=json']), true, 512, JSON_THROW_ON_ERROR);
+        $users = array_column($plan['users'], null, 'login');
+        self::assertArrayHasKey('sso0001', $users);
+        self::assertArrayHasKey('reference01', $users);
+        self::assertFalse($users['sso0001']['site_member']);
+        self::assertSame('map_existing_user', $users['sso0001']['action']);
+        self::assertSame('', $users['sso0001']['role']);
+        self::assertFalse($users['reference01']['site_member']);
+        self::assertSame('create_wordpress_user', $users['reference01']['action']);
+        self::assertSame('author', $users['sso0002']['role']);
+        self::assertTrue($users['sso0002']['site_member']);
+        $result = self::$sandbox->command('target', $args);
+        self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
+        $status = $this->runStatus($this->runId($result));
+        self::assertSame('completed', $status['status']);
+        $site = $status['site_id'];
+        $new = self::$sandbox->fixture('target', 'lookup-user', ['reference01'])['id'];
+        $existing = $users['sso0001']['target_id'];
+        self::assertNotSame((int) $fixture['existing'], $existing);
+        self::assertNotSame((int) $fixture['new'], $new);
+        $content = self::$sandbox->fixture('target', 'reference-content', [(string) $site]);
+        self::assertSame(['existing-reference' => (string) $existing, 'new-reference' => (string) $new], array_column($content['posts'], 'post_author', 'post_name'));
+        self::assertSame(['anonymous' => '0', 'existing-reference' => (string) $existing, 'new-reference' => (string) $new], array_column($content['comments'], 'user_id', 'comment_content'));
+        $after = self::$sandbox->fixture('target', 'users');
+        self::assertSame($usersBefore[$existing], $after[$existing], 'A reference-only existing account must remain completely unchanged.');
+        foreach ([$new, $existing] as $id) {
+            self::assertArrayNotHasKey('dst_' . $site . '_capabilities', $after[$id]['meta']);
+            self::assertArrayNotHasKey('dst_' . $site . '_user_level', $after[$id]['meta']);
+        }
+        foreach ($usersBefore as $id => $before) {
+            unset($after[$id]['meta']['dst_' . $site . '_capabilities'], $after[$id]['meta']['dst_' . $site . '_user_level']);
+            self::assertSame($before, $after[$id]);
+        }
+        $credentials = self::$sandbox->fixture('target', 'credentials', ['reference01']);
+        self::assertFalse($credentials['legacy_password_works']);
+        self::assertTrue($credentials['reset_key_empty']);
+        self::assertFalse($credentials['superadmin']);
+        self::assertSame($sourceBefore, self::$sandbox->fixture('source', 'state'));
+        self::assertSame($controlBefore, self::$sandbox->fixture('target', 'snapshot', ['2']));
+        $this->assertWorkspaceClean();
+    }
+
+    public function testMissingAuthorAndCommentUsersAreRejectedBeforeCreatingAnySite(): void
+    {
+        foreach (['post' => 3, 'comment' => 99999] as $kind => $missing) {
+            $package = $this->modifiedPackage(function (ZipArchive $zip) use ($kind): void {
+                if ($kind === 'post') {
+                    $this->rewriteCsv($zip, static function (array $row): array {
+                        // A legacy CSV without membership flags must receive the same check.
+                        unset($row['site_member']);
+                        if ($row['ID'] === '3') {
+                            $row['ID'] = '9000';
+                        }
+                        return $row;
+                    });
+                } else {
+                    $zip->addFromString('tables.sql', $zip->getFromName('tables.sql') . "\nINSERT INTO `src_2_comments` (`comment_ID`, `user_id`) VALUES (9000,99999);\n");
+                }
+            });
+            $message = 'source user ID ' . $missing;
+            $before = self::$sandbox->fixture('target', 'state');
+            $preview = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $package, '--new_url=http://target.test/missing-reference/', '--dry-run']);
+            self::assertNotSame(0, $preview['code']);
+            self::assertStringContainsString($message, $preview['stderr']);
+            self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+            $this->assertRejected($package, 'http://target.test/missing-reference/', $message);
+        }
+    }
+
+    public function testExportRejectsReferencesToDeletedUsersAndRemovesTheIncompletePackage(): void
+    {
+        $source = self::$sandbox->fixture('source', 'content', ['2']);
+        $before = self::$sandbox->fixture('source', 'state');
+        $setAuthor = static fn (int $id) => 'global $wpdb; $wpdb->update($wpdb->posts, ["post_author" => ' . $id . '], ["ID" => ' . (int) $source['post_id'] . ']);';
+        try {
+            self::$sandbox->wp('source', ['eval', $setAuthor(99999), '--url=http://source.test/source/']);
+            $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', 'orphan-reference.zip', '--url=http://source.test/source/']);
+            self::assertNotSame(0, $result['code']);
+            self::assertStringContainsString('source user ID 99999', $result['stderr']);
+            self::assertSame([], glob(self::$sandbox->root . '/runs-source/export-*/orphan-reference.zip'));
+        } finally {
+            self::$sandbox->wp('source', ['eval', $setAuthor((int) $source['author']), '--url=http://source.test/source/']);
+        }
+        self::assertSame($before, self::$sandbox->fixture('source', 'state'));
+        $this->assertWorkspaceClean();
     }
 
     public function testExplicitUploadExclusionPreservesSourceProtectionFilesAndRecordsOmissions(): void

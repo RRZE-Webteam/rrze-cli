@@ -7,7 +7,23 @@ use RuntimeException;
 /** CSV validation and SSO identity matching, shared by all migration paths. */
 final class Users
 {
-    public const HEADERS = ['ID', 'user_login', 'user_nicename', 'user_email', 'user_url', 'user_registered', 'role', 'display_name', 'first_name', 'last_name', 'nickname', 'description'];
+    public const HEADERS = ['ID', 'user_login', 'user_nicename', 'user_email', 'user_url', 'user_registered', 'role', 'display_name', 'first_name', 'last_name', 'nickname', 'description', 'site_member'];
+
+    /** Older packages contain members only; an absent flag retains that meaning. */
+    public static function isMember(array $row): bool
+    {
+        return ($row['site_member'] ?? '1') === '1';
+    }
+
+    public static function requireReferences(array $ids, array $rows): void
+    {
+        $known = array_fill_keys(array_map('intval', array_column($rows, 'ID')), true);
+        foreach ($ids as $id) {
+            if ($id !== 0 && !isset($known[$id])) {
+                throw new RuntimeException('The package is missing source user ID ' . $id . ' referenced by a post or comment. Create a new export including referenced accounts.');
+            }
+        }
+    }
 
     public static function forbidden(string $field): bool
     {
@@ -50,7 +66,9 @@ final class Users
                 $login = $row['user_login'];
                 $email = $row['user_email'];
                 if (!ctype_digit($row['ID']) || (int) $row['ID'] < 1 || $login === '' || trim($login) !== $login
-                    || strlen($login) > 60 || !filter_var($email, FILTER_VALIDATE_EMAIL) || $row['role'] === '') {
+                    || strlen($login) > 60 || !filter_var($email, FILTER_VALIDATE_EMAIL)
+                    || !in_array($row['site_member'] ?? '1', ['0', '1'], true)
+                    || (self::isMember($row) ? $row['role'] === '' : $row['role'] !== '')) {
                     throw new RuntimeException('Invalid user ID, SSO login, company email or role in the package.');
                 }
                 if (isset($ids[(int) $row['ID']]) || isset($logins[strtolower($login)]) || isset($emails[strtolower($email)])) {
@@ -86,7 +104,7 @@ final class Users
         global $wpdb;
         $roles = wp_roles()->roles;
         foreach ($rows as &$row) {
-            if (sanitize_user($row['user_login'], true) !== $row['user_login'] || !isset($roles[$row['role']])) {
+            if (sanitize_user($row['user_login'], true) !== $row['user_login'] || (self::isMember($row) && !isset($roles[$row['role']]))) {
                 throw new RuntimeException('The package contains an unsupported SSO login or an unknown target role.');
             }
             $candidates = $wpdb->get_results($wpdb->prepare("SELECT ID, user_login, user_email FROM {$wpdb->users} WHERE user_login = %s OR user_email = %s", $row['user_login'], $row['user_email']), ARRAY_A);

@@ -28,7 +28,7 @@ final class Posts
                             continue;
                         }
                         if (!isset($ids[$old])) {
-                            throw new RuntimeException('The package is missing a user referenced by a post or comment.');
+                            throw new RuntimeException('No identity mapping for source user ID ' . $old . ' in ' . $table . '.' . $column . ' (record ' . $last . ').');
                         }
                         // Update each record once, even when source and target ID ranges overlap.
                         if ($wpdb->update($table, [$column => $ids[$old]], [$key => $last], ['%d'], ['%d']) === false) {
