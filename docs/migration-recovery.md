@@ -44,14 +44,19 @@ Das Protokoll enthält IDs, Zielressourcen, Benutzer-ID-Zuordnungen, Dateizähle
 | Zustand | Bedeutung |
 | --- | --- |
 | `active` | Der Lauf hält seine Dateisperre. Nicht aufräumen oder parallel wiederherstellen. |
-| `completed` | Der gewählte Importumfang einschließlich Ergebnisprüfung und Arbeitsverzeichnis-Bereinigung wurde erfolgreich protokolliert. Bei `--skip-uploads` bleiben die manuellen Medienarbeiten offen. |
+| `media_pending` | Website-Daten sind importiert und geprüft. Externer Medientransfer oder dessen Prüfung stehen aus; die Website dafür nicht erneut importieren oder löschen. |
+| `completed` | Datenimport und separate Medienprüfung sind abgeschlossen. Ausdrücklich ausgeschlossene Verzeichnisse gehören nicht zum geprüften Umfang. |
 | `failed` | Ein behandelter Fehler hat den Ablauf gestoppt. `failure_step` nennt den zuletzt betroffenen Schritt; bereits ausgeführte Änderungen bleiben bestehen. |
 | `interrupted` | Ein Abbruch wurde erkannt und protokolliert. Bereits ausgeführte Änderungen bleiben bestehen. |
 | `interrupted_or_unfinished` | Das Protokoll meldet noch einen laufenden Vorgang, dessen Dateisperre aber nicht mehr gehalten wird. Der letzte Schritt kann teilweise oder vollständig ausgeführt sein. Es erfolgt keine automatische Schlussfolgerung aus einem verschwundenen Prozess. |
 
 Die Installationssperre umfasst alle rrze-cli-Importe derselben Datenbank und desselben Basispräfixes, auch bei unterschiedlichen Zieladressen. Sie schützt gemeinsam genutzte Benutzer und die Site-ID-Vergabe. Sie blockiert keine normalen WordPress-Anfragen oder fremden Administrationswerkzeuge. Eine Wiederverbindung zur Datenbank ersetzt die Sperre nicht: Wird sie verloren, stoppt der nächste geprüfte Schritt.
 
-Bei ausdrücklich übersprungenen Uploads enthält der Medien-Schritt `skipped` mit Grund `manual_transfer`. Das Journal bewahrt `uploads.skipped: true`, `uploads.transfer: false`, `uploads.verified: false` und `manual_transfer_required: true`; es nennt keinen aufgelösten Upload-Zielpfad. Status und Abschlussmeldung weisen auf den separaten Transfer, die Konfiguration von Pfaden/URLs und die ausstehende Medienprüfung hin. `completed` bestätigt in diesem Fall ausschließlich den gewählten Datenimport. Auch nach einem externen `rsync` aktualisiert der Statusbefehl den Mediennachweis nicht automatisch. Bei einem erneuten Import muss `--skip-uploads` wieder ausdrücklich gewählt werden.
+Neue Läufe verwenden ausschließlich externen Medientransfer. Das Journal speichert `uploads.transport: rsync`, das tatsächliche Medienziel und zunächst `uploads.verified: false`. `media plan RUN_ID` zeigt die Transferbefehle erneut. `media verify RUN_ID` prüft Dateien, Referenzen und die Bindung an die neue Website und aktualisiert das Journal. Ein Fehler oder Abbruch dieser wiederholbaren Prüfung lässt die Website erhalten und setzt den Lauf auf `media_pending`. Der Statusbefehl selbst führt keine Medienprüfung durch. Ein früherer erfolgreicher Prüfnachweis gilt nur für seinen Zeitpunkt.
+
+Vor dem Löschen einer Quellwebsite muss ein zum Export passender Mediensnapshot unabhängig von deren Upload-Verzeichnis vorliegen. Das ZIP enthält keine Mediendateien. Alte Journale bleiben lesbar, erhalten aber keinen nachträglich erfundenen Mediennachweis. Details: [Medientransfer](migration-media.md).
+
+Die folgende Abbruchbehandlung gilt für fehlgeschlagene **Datenimporte**. Bei `media_pending` stattdessen Transfer bzw. Konfiguration korrigieren und `media verify` wiederholen.
 
 ## Einen Abbruch behandeln
 
@@ -99,6 +104,6 @@ Bei einem bereits fehlgeschlagenen Lauf zuerst den Status lesen, anschließend d
 
 Bei verfügbarem PCNTL fordert `SIGINT` oder `SIGTERM` einen Abbruch an einer geprüften Grenze an. Ein laufender Datenbankbefehl muss zunächst zurückkehren; der Vorgang wird nicht als atomar rückgängig gemacht. Ohne PCNTL oder bei `SIGKILL`, Stromausfall und ähnlichen Abbrüchen bleibt gegebenenfalls nur der letzte Checkpoint.
 
-Die Ergebnisprüfung kontrolliert Zielzugehörigkeit, Tabellen, URLs, Benutzerrollen und -referenzen sowie die Hashes der automatisch übertragenen Medien. Globale Daten bereits vorhandener beteiligter Benutzer dürfen sich gegenüber dem Ausgangszustand ausschließlich um die Mitgliedschaft der neuen Website unterscheiden. Ändert ein anderer Prozess währenddessen beispielsweise deren Profil oder Sitzungen, kann die konservative Prüfung ebenfalls abbrechen. Solche Unterschiede werden nicht automatisch zurückgeschrieben.
+Die Ergebnisprüfung kontrolliert Zielzugehörigkeit, Tabellen, URLs, Benutzerrollen und -referenzen und bestehende globale Benutzer. Die separate Medienprüfung kontrolliert anschließend die extern übertragenen Dateien und Attachment-Referenzen. Globale Daten bereits vorhandener beteiligter Benutzer dürfen sich gegenüber dem Ausgangszustand ausschließlich um die Mitgliedschaft der neuen Website unterscheiden. Ändert ein anderer Prozess währenddessen beispielsweise deren Profil oder Sitzungen, kann die konservative Prüfung ebenfalls abbrechen. Solche Unterschiede werden nicht automatisch zurückgeschrieben.
 
 Die ursprüngliche Website nach einer vorherigen manuellen Löschung wiederherzustellen, globale Fremdänderungen rückgängig zu machen oder beliebiges fremdes SQL auszuführen, ist nicht durch dieses Protokoll abgesichert. Dafür bleiben unabhängige Sicherungen, ein abgestimmtes Wartungsfenster und eine gesonderte Betriebsabnahme erforderlich. Globale Benutzer- oder Netzwerktabellen dürfen nicht pauschal über eine weiterbetriebene Multisite zurückgespielt werden.

@@ -239,7 +239,7 @@ final class Sandbox
     public function exportPackage(): string
     {
         if ($this->exportedPackage === null) {
-            $this->wp('source', ['rrze-migration', 'export', 'all', 'fixture.zip', '--url=http://source.test/source/', '--uploads']);
+            $this->wp('source', ['rrze-migration', 'export', 'all', 'fixture.zip', '--url=http://source.test/source/']);
             $packages = glob($this->root . '/runs-source/export-*/fixture.zip');
             if (count($packages) !== 1) {
                 throw new RuntimeException('Expected exactly one initial private export package.');

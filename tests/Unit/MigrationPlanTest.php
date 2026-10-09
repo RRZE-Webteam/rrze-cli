@@ -26,20 +26,20 @@ final class MigrationPlanTest extends TestCase
         Plan::assertUnchanged(['users' => [['action' => 'create_wordpress_user', 'target_id' => null]]], ['users' => [['action' => 'add_site_membership', 'target_id' => 12]]]);
     }
 
-    public function testManualTransferDecisionCannotChangeAfterApproval(): void
+    public function testMediaScopeCannotChangeAfterApproval(): void
     {
-        $approved = ['destination_details' => ['storage' => null], 'uploads' => ['skipped' => true]];
+        $approved = ['destination_details' => ['storage' => null], 'uploads' => ['excluded_directories' => ['backups']]];
         Plan::assertUnchanged($approved, $approved);
         $this->addToAssertionCount(1);
         $current = $approved;
-        $current['uploads']['skipped'] = false;
+        $current['uploads']['excluded_directories'] = [];
         $this->expectExceptionMessage('plan changed during review');
         Plan::assertUnchanged($approved, $current);
     }
 
-    public function testStringFalseCannotBeMistakenForConsentToSkipUploads(): void
+    public function testRemovedSkipOptionIsRejectedEvenWithStringFalse(): void
     {
-        $this->expectExceptionMessage('flag without a value');
+        $this->expectExceptionMessage('upload options have been removed');
         Preflight::build([], '', ['skip-uploads' => 'false']);
     }
 }

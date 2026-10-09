@@ -35,6 +35,8 @@ The directory must be outside WordPress and `wp-content`, owned by the CLI user 
   <run-id>/package.zip
            run.json
            active.lock
+           media.json
+           media-files.txt
 ```
 
 Relative import paths resolve against this private root, never against the WordPress directory. Use the export's displayed absolute path (or its path relative to this root) on the same system, or transfer the ZIP into a private location on the destination, for example `incoming/website.zip`. Absolute input paths outside WordPress and `wp-content` are also accepted. Webroot packages are rejected; move old packages to private storage yourself before importing. The importer neither moves nor deletes the original. A dry-run with an absolute private input needs no configured root and creates no persistent storage. Exports and imports are retained until the administrator removes them.
@@ -44,13 +46,13 @@ Relative import paths resolve against this private root, never against the WordP
 Run from the source WordPress directory:
 
 ```sh
-wp rrze-migration export all website.zip --url=https://source.example.test/site/ --uploads
+wp rrze-migration export all website.zip --url=https://source.example.test/site/
 ```
 
 On Multisite, `--site-id` can select the source instead of `--url`:
 
 ```sh
-wp rrze-migration export all website.zip --site-id=5 --uploads
+wp rrze-migration export all website.zip --site-id=5
 ```
 
 The ID must identify an existing website in this installation. It takes precedence over the initial `--url` context. If needed, the command starts a fresh WP-CLI process for that site's registered address so its plugins, user roles and upload settings load correctly, and verifies the loaded site ID before export. Invalid IDs and incorrect routing stop the export. The direct `export all` command remains suitable for scripts and does not prompt; use the wizard for source confirmation. The low-level `export tables` and `export users` commands continue to use `--url`.
@@ -60,15 +62,15 @@ The output argument is a filename without a directory; `.zip` is appended if mis
 Uploads containing server configuration or executable files, such as `.htaccess` or `index.php`, block export and the error names the offending path. To omit a plugin's backup or temporary directory deliberately, use an explicit directory exclusion:
 
 ```sh
-wp rrze-migration export all website.zip --url=https://source.example.test/site/ --uploads --exclude-upload-dirs=wp-migrate-db
+wp rrze-migration export all website.zip --url=https://source.example.test/site/ --exclude-upload-dirs=wp-migrate-db
 ```
 
-`--exclude-upload-dirs` accepts comma-separated existing directories relative to that site's upload root, without wildcards. Nothing is excluded by default. Each selected directory and its descendants are omitted; neighbouring names such as `wp-migrate-db-other` remain included. Source files are neither deleted nor modified. The omission is recorded in `site.json` and shown in the import plan; excluded files are not transferred or verified. Do not remove source protection files just to satisfy the archive checks.
+`--exclude-upload-dirs` accepts comma-separated existing directories relative to that site's upload root, without wildcards. For the modern network main site, `sites` is automatically excluded because it contains other websites' media. Each selected directory and its descendants are omitted; neighbouring names such as `wp-migrate-db-other` remain included. Source files are neither deleted nor modified. The omission is recorded in `site.json` and shown in the import plan; excluded files are not transferred or verified. Do not remove source protection files just to satisfy the archive checks.
 
 Core tables and site-owned custom tables of a subsite are selected by default. For a main site, the default includes only its core tables: its base prefix also matches global and other-site tables. Additional main-site tables require explicit selection and an administrative check that they belong exclusively to that site.
 
 ```sh
-wp rrze-migration export all website.zip --url=https://source.example.test/ --custom-tables=wp_local_data --uploads
+wp rrze-migration export all website.zip --url=https://source.example.test/ --custom-tables=wp_local_data
 ```
 
 `--custom-tables` adds to the default selection. `--tables` selects an explicit list, but a full ZIP package must still contain every core site table. Global user/network tables and other sites' tables cannot be selected. Separate SQL and CSV exports remain available through `export tables` and `export users`; those low-level commands still use their explicit output paths, so choose an absolute private path for sensitive data.
@@ -91,7 +93,7 @@ The wizard uses the same export/import implementation and preflight as the direc
 
 Piped input/output, `--yes` and `--quiet` are rejected. The wizard accepts `--site-id` only for export. Scripts continue to use `export all`, `import all --dry-run --format=json` and `import all` with explicit arguments. See [Wizard usage](docs/migration-wizard.md) (German) for the guided workflow and cancellation behavior.
 
-When uploads are enabled, the export wizard also asks for optional directory exclusions and lists them before confirmation. The import wizard displays recorded exclusions and requires separate consent before importing such a package.
+The export wizard asks for optional directory exclusions and lists them before confirmation. The import wizard displays recorded exclusions and requires separate consent before importing such a package.
 
 ### Preflight and dry-run
 
@@ -106,20 +108,34 @@ Both commands use the same preflight as execution. The plan shows the source and
 
 The next site ID is an estimate, not a reservation. Execution rebuilds the plan under the migration lock and checks the allocated ID before WordPress initializes it. Existing tables, upload directories (even empty ones), links or membership metadata for that ID block the import. Nothing is automatically removed. A conflict discovered after the site row was inserted retains that incomplete row for manual inspection.
 
-Packages use format version 1 in `site.json`, with exact filenames, sizes and SHA-256 hashes for `users.csv`, `tables.sql` and every included upload. Unsupported/unversioned packages must be exported again. Checksums detect transfer damage and changed contents; they do not authenticate the producer or make arbitrary SQL safe. Unexpected entries, path collisions, links, encrypted archives and server-executable upload files are rejected before import.
+Packages use format version 2 in `site.json`, with sizes and SHA-256 hashes for `users.csv`, `tables.sql` and `media.json`. The media inventory records the source directory, base URL, relative filenames, sizes, hashes and exclusions. Media bytes are never included in the ZIP. Version 1 packages require a new export. Unsupported/unversioned packages must be exported again. Checksums detect transfer damage and changed contents; they do not authenticate the producer or make arbitrary SQL safe. Unexpected entries, path collisions, links, encrypted archives and server-executable upload files are rejected before import.
 
-Current bounds: 2 GiB ZIP, 4 GiB expanded data, 100,000 entries, 512 MiB per media file, 64 MiB SQL, 16 MiB CSV, 4 MiB metadata and 10,000 users. Entries larger than 1 MiB must not exceed a 200:1 compression ratio. Available PHP memory, temporary storage and upload storage are checked conservatively; these checks cannot reserve capacity or determine free space on the database server.
+Current bounds: 2 GiB ZIP, 4 GiB expanded data, 100,000 entries, 64 MiB SQL, 16 MiB CSV, 4 MiB site metadata, 64 MiB media inventory (up to 100,000 files; media bytes are external) and 10,000 users. Entries larger than 1 MiB must not exceed a 200:1 compression ratio. Available PHP memory, temporary storage and upload storage are checked conservatively; these checks cannot reserve capacity or determine free space on the database server.
 
-Destination preflight requires explicit database/schema grants sufficient for the migration. Grants available only through roles or individual tables are not yet supported. Automatic media transfer supports standard multisite uploads under `wp-content/uploads/sites/<ID>`. Custom upload paths, upload filters and legacy `ms-files.php` layouts require a migration adapter or an explicit import without uploads. Source upload path options are reset for the newly created destination.
+Destination preflight requires explicit database/schema grants sufficient for migration. Grants available only through roles or individual tables are not yet supported. The destination must have a dedicated standard multisite media root under `wp-content/uploads/sites/<ID>`. Filters that preserve that root are supported, including subdirectory filters. Custom/shared destination roots and legacy `ms-files.php` destinations still require an adapter; rsync is not a bypass for ownership checks. Source upload options are reset on the new site; its effective directory and URL are resolved in its own WordPress context.
 
-When that upload-layout limitation occurs, the wizard explains it and asks `Continue without uploads (yes/no) [no]` in both preview and import. Enter cancels. Choosing `yes` rebuilds the plan with media handling delegated to the administrator; a preview still creates no site, and an import still requires the destination URL and final confirmation. Other errors do not offer this fallback. Scripts opt in with `--skip-uploads`:
+### External media transfer (required workflow)
+
+Freeze source writes before exporting and retain a matching media snapshot, especially before deleting a source website in the same installation. The ZIP is not a media backup. Export and import have no `--uploads` or `--skip-uploads` option anymore.
+
+The data import maps source media URLs to the new site's actual media URL (including its new site ID), reserves an empty site-owned media directory, and ends with `media_pending`. It prints rsync preview/copy instructions without executing them or managing SSH credentials. To regenerate commands on the destination:
 
 ```sh
-wp rrze-migration import all incoming/website.zip --new_url=https://target.example.test/new-site/ --skip-uploads --dry-run --format=json
-wp rrze-migration import all incoming/website.zip --new_url=https://target.example.test/new-site/ --skip-uploads --run-dir=/srv/private/rrze-migrations
+wp rrze-migration media plan RUN_ID --source-host=operator@source.example --source-dir=/srv/snapshots/site-media
+# Or explicitly use a local/mounted snapshot:
+wp rrze-migration media plan RUN_ID --source-dir=/mnt/snapshots/site-media
 ```
 
-With `--skip-uploads`, packaged media remain subject to all archive, checksum and temporary-storage checks, but are not copied to the destination or verified there. The general site URL replacement still runs; the standard upload site-ID path replacement is skipped. Transfer media separately (for example with `rsync`), configure the actual destination location, adjust media paths/URLs and verify the files yourself. The importer does not resolve or inspect custom upload locations. Existing sites, tables, memberships and leftovers/links in the standard upload location still block migration. The plan reports `uploads.skipped: true`, `uploads.transfer: false`, `uploads.verified: false` and null upload destination/storage. The journal, status and completion message retain the manual-transfer requirement; the media checkpoint is `skipped`.
+Run the displayed preview, review it, then run the copy command. Remote commands require rsync 3.0+ on both hosts (`--protect-args`). The commands use a private NUL-delimited file list, do not follow/copy symlinks, and use `--ignore-existing` without deletion. A changed existing target file must be inspected and repaired deliberately within the new site's directory; repeating the suggested command will not overwrite it.
+
+```sh
+wp rrze-migration media verify RUN_ID
+wp rrze-migration status RUN_ID --format=json
+```
+
+Verification checks the original retained package, installation/network/site ownership, unchanged effective upload location, exact inventory, file sizes/hashes and attachment references/URLs. Missing, additional, changed or linked files leave the run `media_pending`. Successful verification changes it to `completed`; repeating verification is supported and a failed recheck revokes the previous media success. No website data are reimported or rewritten by this command. Excluded directories remain outside the migration scope.
+
+For protected media, configure rrze-ac and the web-server rules **before** transfer. Verification checks rrze-ac configuration and additionally requires `--access-checked`, which records the administrator's confirmation of unauthorized and authorized HTTP access tests. It does not claim to have performed those HTTP tests automatically. See [Media transfer](docs/migration-media.md) for details and recovery.
 
 ### Import
 
@@ -139,7 +155,7 @@ Actual imports require a private persistent `--run-dir` outside web roots, or `R
 wp rrze-migration status RUN_ID --run-dir=/srv/private/rrze-migrations --format=json
 ```
 
-Imports sharing the database and base prefix run one at a time, including imports to different destination URLs. Each created site is tagged with its run ID and ownership is checked between steps. Before success, the importer verifies destination tables, URLs, user mappings, existing participant profiles and automatically transferred media. A running step without a completion checkpoint may have partially or fully executed; individual steps are never replayed automatically.
+Imports sharing the database and base prefix run one at a time, including imports to different destination URLs. Each created site is tagged with its run ID and ownership is checked between steps. Before reporting the site-data import as complete, the importer verifies destination tables, URLs, user mappings and existing participant profiles. The overall run remains `media_pending` until the separate media verification succeeds. A running step without a completion checkpoint may have partially or fully executed; individual steps are never replayed automatically.
 
 Database export/import and URL replacement run in child processes. A failed command stops the migration with a nonzero status. A partially created site is retained for inspection and must be deleted manually before a retry. The import never removes sites or global users automatically.
 
@@ -150,4 +166,4 @@ Database export/import and URL replacement run in child processes. A failed comm
 - `--plugins` and `--themes`, including legacy packages containing their code, are rejected. Provide dependencies separately in the destination.
 - `--mysql-single-transaction` is rejected: wrapping a dump containing DDL does not make the migration atomic.
 
-Use packages from controlled exports only. Current SQL table checks are not a sandbox for arbitrary SQL. Full SQL isolation, extension compatibility, concurrency with external writers and real SSO acceptance remain part of the following work packages. Recovery uses the retained package for a fresh import after manual site deletion; it does not restore an independently deleted old site or roll back global tables. A successful dry-run does not execute SQL and cannot guarantee a successful import. An import without packaged media does not verify a separate media transfer.
+Use packages from controlled exports only. Current SQL table checks are not a sandbox for arbitrary SQL. Full SQL isolation, extension compatibility, concurrency with external writers and real SSO acceptance remain part of the following work packages. Recovery uses the retained package for a fresh import after manual site deletion; it does not restore an independently deleted old site or roll back global tables. A successful dry-run does not execute SQL and cannot guarantee a successful import. The site-data import leaves media pending; the separate `media verify` command checks the external transfer. Historical media URL aliases, arbitrary plugin references and real HTTP access still require operational review.

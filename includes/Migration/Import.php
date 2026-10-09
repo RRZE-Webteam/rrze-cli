@@ -12,7 +12,7 @@ use WP_CLI;
 class Import extends Command
 {
     /** The wizard supplies a reviewer; direct CLI calls retain their noninteractive behavior. */
-    public function __construct(private readonly ?\Closure $review = null, private readonly ?\Closure $withoutUploads = null)
+    public function __construct(private readonly ?\Closure $review = null)
     {
     }
 
@@ -31,8 +31,6 @@ class Import extends Command
      * : Comma-separated post meta keys containing numeric user IDs.
      * [--dry-run]
      * : Validate and display the migration plan without writing to the destination.
-     * [--skip-uploads]
-     * : Explicitly skip media transfer, media path rewriting and media verification; handle these manually.
      * [--format=<format>]
      * : Dry-run output: text (default) or json.
      * [--run-dir=<directory>]
@@ -52,7 +50,7 @@ class Import extends Command
         $execution = null;
         $dryRun = isset($assoc_args['dry-run']);
         $error = null;
-        if ($this->review === null && $this->withoutUploads === null) {
+        if ($this->review === null) {
             Console::configure(false, isset($assoc_args['verbose']));
         }
         try {
@@ -81,22 +79,10 @@ class Import extends Command
                 WP_CLI::log('Checking migration package...');
             }
             $package = Package::read($filename, $workspace);
-            try {
-                $plan = Preflight::build($package, $workspace, $assoc_args);
-            } catch (UnsupportedUploadLayout $limitation) {
-                if ($this->withoutUploads === null) {
-                    throw $limitation;
-                }
-                if (!(($this->withoutUploads)($limitation->getMessage()))) {
-                    throw new RuntimeException('Import cancelled before site creation. No destination changes were made.');
-                }
-                $assoc_args['skip-uploads'] = true;
-                // Rebuild the full plan from the same validated package; other errors still abort.
-                $plan = Preflight::build($package, $workspace, $assoc_args);
-            }
+            $plan = Preflight::build($package, $workspace, $assoc_args);
             $address = $plan['target'];
             if (!$dryRun) {
-                $run->plan($plan, hash('sha256', DB_NAME . '|' . $wpdb->base_prefix));
+                $run->plan($plan, Media::installation());
                 $reviewed = $plan['report'];
                 if ($this->review !== null && !($this->review)($reviewed)) {
                     throw new RuntimeException('Import cancelled before site creation. No destination changes were made.');
@@ -109,7 +95,7 @@ class Import extends Command
                 if ($this->review !== null) {
                     Plan::assertUnchanged($reviewed, $plan['report']);
                 }
-                $run->plan($plan, hash('sha256', DB_NAME . '|' . $wpdb->base_prefix));
+                $run->plan($plan, Media::installation());
                 $baseline = Verification::users($plan['users']);
                 $run->baseline($baseline);
                 $execution->step('create_site', function () use (&$blogId, $plan, $address, $run): void {
@@ -125,7 +111,7 @@ class Import extends Command
                         if ($wpdb->last_error || $others !== null) {
                             throw new RuntimeException('Another site claimed the destination during site allocation.');
                         }
-                        Destination::resources($blogId, $plan['skipUploads']);
+                        Destination::resources($blogId);
                         if (!add_site_meta($blogId, 'rrze_migration_run', $run->id, true)) {
                             throw new RuntimeException('Cannot mark the newly created site as owned by this run.');
                         }
@@ -144,20 +130,20 @@ class Import extends Command
                 $owned = static fn () => Verification::site($blogId, $run->id, $address);
                 WP_CLI::log('Importing into new site ' . $blogId . '...');
                 $execution->step('import_tables', fn () => $this->import_tables($workspace . '/tables.sql', array_keys($plan['mapping']), array_values($plan['mapping'])), $owned);
-                $execution->step('replace_urls', fn () => $this->replace_urls(array_values($plan['mapping']), $plan['meta'], $plan['source'], $address, $blogId, $plan['skipUploads']), $owned);
                 $execution->step('configure_site', fn () => $this->configure_site($plan['meta'], $address, $blogId), $owned);
+                $layout = $execution->step('prepare_media', function () use ($address, $blogId, $plan, $run): array {
+                    $layout = MediaTransfer::layout($address['url'], $blogId);
+                    MediaTransfer::prepare($plan['media'], $layout, $run);
+                    return $layout;
+                }, $owned);
+                $execution->step('replace_urls', function () use ($plan, $layout, $address, $blogId): void {
+                    MediaTransfer::replaceUrls(array_values($plan['mapping']), $plan['media'], $layout, $plan['source'], $address);
+                    // The destination may itself begin with the source URL (same-network imports).
+                    // Restore these two authoritative options after the general replacement.
+                    $this->set_site_urls($address, $blogId);
+                }, $owned);
                 $ids = $execution->step('import_users', fn () => $this->import_users($plan['users'], $blogId, $execution), $owned);
                 $execution->step('remap_references', fn () => Posts::remap($blogId, $ids, $plan['fields']), $owned);
-                if ($plan['skipUploads']) {
-                    $run->skipUploads();
-                    WP_CLI::warning(Preflight::MANUAL_UPLOADS_NOTICE);
-                } else {
-                    $execution->step('import_uploads', function () use ($workspace, $blogId, $plan, $execution): void {
-                        if (is_dir($workspace . '/wp-content/uploads')) {
-                            $this->move_uploads($workspace . '/wp-content/uploads', $blogId, $plan['destination']['uploads_directory'], $execution);
-                        }
-                    }, $owned);
-                }
                 $execution->step('finalize', static function () use ($blogId): void {
                     global $wpdb;
                     switch_to_blog($blogId);
@@ -171,7 +157,6 @@ class Import extends Command
                     }
                 }, $owned);
                 $execution->step('verify', static fn () => Verification::result($plan, $package, $blogId, $run->id, $ids, $baseline), $owned);
-                $run->verifiedUploads();
             }
         } catch (\Throwable $failure) {
             $error = $failure->getMessage();
@@ -195,7 +180,7 @@ class Import extends Command
             }
             if ($run !== null) {
                 try {
-                    $run->finish($execution?->cancelled() ? 'interrupted' : ($error === null ? 'completed' : 'failed'));
+                    $run->finish($execution?->cancelled() ? 'interrupted' : ($error === null ? 'media_pending' : 'failed'));
                 } catch (\Throwable $failure) {
                     $error = ($error ? $error . ' ' : '') . 'Could not persist the final migration status.';
                 }
@@ -211,10 +196,9 @@ class Import extends Command
                 self::show_plan($plan['report']);
                 WP_CLI::success('Dry-run complete. No site, users, tables or uploads were created.');
             }
-        } elseif ($plan['skipUploads']) {
-            WP_CLI::success('Site data imported at ' . $address['url'] . ' Uploads were skipped; manual media transfer, path configuration and verification remain required.');
         } else {
-            WP_CLI::success('All done, your new site is available at ' . $address['url']);
+            WP_CLI::success('Site data imported at ' . $address['url'] . ' Media transfer and verification are pending.');
+            Media::instructions($plan['media'], $layout, $run->directory, $run->id);
         }
     }
 
@@ -244,17 +228,6 @@ class Import extends Command
         Utils::checked_command('db import', [$filename]);
     }
 
-    private function replace_urls(array $targetTables, array $meta, array $source, array $target, int $blogId, bool $skipUploads): void
-    {
-        Utils::checked_command('search-replace', [Utils::parse_url_for_search_replace($source['url']), Utils::parse_url_for_search_replace($target['url']), ...$targetTables], ['precise' => true], ['url' => $target['url']]);
-        if ($skipUploads) {
-            return;
-        }
-        $from = 'wp-content/uploads' . ($meta['blog_id'] > 1 ? '/sites/' . $meta['blog_id'] : '');
-        $to = 'wp-content/uploads/sites/' . $blogId;
-        Utils::checked_command('search-replace', [$from, $to, ...$targetTables], ['precise' => true], ['url' => $target['url']]);
-    }
-
     private function configure_site(array $meta, array $target, int $blogId): void
     {
         global $wpdb;
@@ -282,6 +255,26 @@ class Import extends Command
             restore_current_blog();
         }
         Utils::checked_command('transient delete', [], ['all' => true], ['url' => $target['url']]);
+    }
+
+    private function set_site_urls(array $target, int $blogId): void
+    {
+        global $wpdb;
+        switch_to_blog($blogId);
+        try {
+            foreach (['alloptions', 'notoptions', 'home', 'siteurl'] as $key) {
+                wp_cache_delete($key, 'options');
+            }
+            foreach (['home', 'siteurl'] as $option) {
+                update_option($option, untrailingslashit($target['url']));
+                $value = $wpdb->get_var($wpdb->prepare("SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", $option));
+                if ($wpdb->last_error || $value !== untrailingslashit($target['url'])) {
+                    throw new RuntimeException('Could not preserve the destination URL after media mapping.');
+                }
+            }
+        } finally {
+            restore_current_blog();
+        }
     }
 
     /** Called only within the ownership-guarded configure_site step of a newly created site. */
@@ -370,43 +363,4 @@ class Import extends Command
         return $ids;
     }
 
-    private function move_uploads(string $source, int $blogId, string $expectedPath, Execution $execution): void
-    {
-        switch_to_blog($blogId);
-        try {
-            $uploads = wp_upload_dir(null, false, true);
-            if ($uploads['basedir'] !== $expectedPath || Destination::uploadPath($blogId) !== $expectedPath) {
-                throw new RuntimeException('The destination upload path changed after preflight.');
-            }
-            if ($uploads['error']) {
-                throw new RuntimeException('Cannot prepare the new site upload directory.');
-            }
-            if (!is_dir($expectedPath) && !mkdir($expectedPath, 0755, true)) {
-                throw new RuntimeException('Cannot create the new site upload directory.');
-            }
-            foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($source, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::SELF_FIRST) as $item) {
-                $execution->assertOwned();
-                $relative = substr($item->getPathname(), strlen($source) + 1);
-                $destination = $uploads['basedir'] . '/' . $relative;
-                if ($item->isLink() || is_link($destination)) {
-                    throw new RuntimeException('Symbolic links in migration uploads are not supported.');
-                }
-                if ($item->isDir()) {
-                    if (!is_dir($destination) && !mkdir($destination, 0755, true)) {
-                        throw new RuntimeException('Cannot create an upload directory.');
-                    }
-                } else {
-                    if (file_exists($destination) || !rename($item->getPathname(), $destination)) {
-                        throw new RuntimeException('An upload file already exists or could not be moved.');
-                    }
-                    if (!chmod($destination, 0644)) {
-                        throw new RuntimeException('Cannot set permissions on an imported upload.');
-                    }
-                    $execution->run->upload();
-                }
-            }
-        } finally {
-            restore_current_blog();
-        }
-    }
 }

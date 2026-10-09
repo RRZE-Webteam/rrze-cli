@@ -38,10 +38,16 @@ final class Status extends Command
                 'Restoring a site deleted before migration requires its independent backup; this run cannot undo that deletion.',
             ];
             $state['preserved_package'] = $root . '/' . $state['run_id'] . '/package.zip';
-            if (!empty($state['uploads']['skipped'])) {
-                $state['media_notice'] = Preflight::MANUAL_UPLOADS_NOTICE;
-            } elseif (isset($state['uploads']) && !$state['uploads']['included']) {
-                $state['media_notice'] = 'Media were absent from the package. A separate media transfer is not verified.';
+            if (($state['uploads']['transport'] ?? null) === 'rsync') {
+                $state['media_notice'] = !empty($state['uploads']['verified']) ? 'External media transfer verified at ' . ($state['media_verification']['checked_at'] ?? 'unknown time') : Preflight::MEDIA_NOTICE;
+                if (in_array($state['status'], ['media_pending', 'completed'], true)) {
+                    $state['recovery'] = ['Site data import is complete. Do not reimport or delete this site to finish its media transfer.',
+                        'Run wp rrze-migration media plan ' . $state['run_id'] . ' --run-dir=' . escapeshellarg($root),
+                        'After rsync, run wp rrze-migration media verify ' . $state['run_id'] . ' --run-dir=' . escapeshellarg($root),
+                        'Verification is repeatable and does not modify website data. Excluded directories are outside the verified scope.'];
+                }
+            } elseif (!empty($state['uploads']['skipped']) || isset($state['uploads']['included']) && !$state['uploads']['included']) {
+                $state['media_notice'] = 'Legacy run: media were not verified. The new external transfer workflow requires a new version 2 export.';
             }
             if (!$state['active']) {
                 $file = $state['preserved_package'];
@@ -54,7 +60,11 @@ final class Status extends Command
                 WP_CLI::log('Run: ' . $state['run_id'] . ' — ' . $state['observed_status']);
                 WP_CLI::log('Last checkpoint: ' . ($state['step'] ?? 'not started') . '; site ID: ' . ($state['site_id'] ?? 'not recorded'));
                 if (isset($state['media_notice'])) {
-                    WP_CLI::warning($state['media_notice']);
+                    if (!empty($state['uploads']['verified'])) {
+                        WP_CLI::log($state['media_notice']);
+                    } else {
+                        WP_CLI::warning($state['media_notice']);
+                    }
                 }
                 if (isset($state['failure_step'])) {
                     WP_CLI::log('Failed step: ' . $state['failure_step']);

@@ -23,8 +23,9 @@ final class Plan
             $lines[] = 'User: ' . $user['login'] . ' -> ' . $user['action'] . ' (' . $membership . ')';
         }
         $lines[] = 'Numeric user-reference fields: ' . (implode(', ', $plan['user_reference_fields']) ?: 'none');
-        $lines[] = 'Packaged media: ' . $plan['uploads']['files'] . ' files, ' . $plan['uploads']['bytes'] . ' bytes';
-        $lines[] = 'Media transfer: ' . (!empty($plan['uploads']['skipped']) ? 'SKIPPED; manual transfer and verification required' : ($plan['uploads']['included'] ? 'automatic' : 'absent from package; separate transfer required'));
+        $lines[] = 'Media inventory: ' . $plan['uploads']['files'] . ' files, ' . $plan['uploads']['bytes'] . ' bytes';
+        $lines[] = 'Media transfer: external rsync; separate verification required';
+        $lines[] = 'Media source: ' . ($plan['uploads']['source_directory'] ?? 'see manifest');
         $lines[] = 'Excluded upload directories: ' . (implode(', ', $plan['uploads']['excluded_directories'] ?? []) ?: 'none');
         $lines[] = 'Upload destination: ' . ($plan['destination_details']['uploads_directory'] ?? 'not resolved; configure manually');
         foreach ($plan['limitations'] as $limitation) {

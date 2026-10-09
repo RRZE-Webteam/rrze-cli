@@ -30,10 +30,8 @@ class Export extends Command
      * : Explicit site-owned tables; a complete package must include the core tables.
      * [--custom-tables=<tables>]
      * : Additional site-owned tables, including explicitly selected main-site tables.
-     * [--uploads]
-     * : Include the site's uploads.
      * [--exclude-upload-dirs=<directories>]
-     * : Explicit comma-separated upload subdirectories to omit; requires --uploads. No wildcards.
+     * : Explicit comma-separated upload subdirectories to omit from the external media transfer. No wildcards.
      * [--plugins]
      * : Unsupported; provide plugins separately in the destination.
      * [--themes]
@@ -65,18 +63,26 @@ class Export extends Command
             }
             $root = PackageStorage::root($assoc_args);
             $output = PackageStorage::exportPath($root, $args[0] ?? 'rrze-migration-' . sanitize_title(get_bloginfo('name')) . '.zip', get_current_blog_id());
-            $uploads = null;
-            $excluded = [];
-            if (isset($assoc_args['uploads'])) {
-                $uploads = wp_upload_dir(null, false);
-                if ($uploads['error']) {
-                    throw new RuntimeException('Cannot read the source uploads directory.');
-                }
-                $excluded = UploadExclusions::parse($assoc_args['exclude-upload-dirs'] ?? '', $uploads['basedir']);
+            $uploads = wp_upload_dir(null, false, true);
+            if (!empty($uploads['error']) || empty($uploads['basedir']) || empty($uploads['baseurl'])) {
+                throw new RuntimeException('Cannot resolve the source media directory and URL.');
             }
+            $excluded = UploadExclusions::parse($assoc_args['exclude-upload-dirs'] ?? '', $uploads['basedir']);
+            // The modern network main site's uploads root contains other sites' media.
+            if (is_multisite() && is_main_site() && !get_site_option('ms_files_rewriting')
+                && rtrim($uploads['basedir'], '/') === rtrim(WP_CONTENT_DIR, '/') . '/uploads'
+                && !in_array('sites', $excluded, true)) {
+                $excluded[] = 'sites';
+                sort($excluded);
+            }
+            $protected = ['_protected'];
+            if (class_exists('RRZE\\AccessControl\\Media\\Files')) {
+                $protected[] = \RRZE\AccessControl\Media\Files::protectedUploadDir();
+            }
+            $protected = array_values(array_unique($protected));
             if ($this->review !== null && !($this->review)([
                 'source' => home_url(), 'site_id' => get_current_blog_id(), 'tables' => $tables,
-                'output' => $output, 'uploads' => isset($assoc_args['uploads']),
+                'output' => $output, 'media_source' => $uploads['basedir'],
                 'excluded_upload_directories' => $excluded,
             ])) {
                 throw new RuntimeException('Export cancelled. No output file was created.');
@@ -92,7 +98,7 @@ class Export extends Command
             $meta = [
                 'url' => home_url(), 'name' => get_bloginfo('name'), 'admin_email' => get_bloginfo('admin_email'),
                 'site_language' => get_bloginfo('language'), 'db_prefix' => $wpdb->prefix,
-                'blog_id' => get_current_blog_id(), 'tables' => $tables, 'uploads_included' => isset($assoc_args['uploads']),
+                'blog_id' => get_current_blog_id(), 'tables' => $tables, 'media_transport' => 'rsync',
                 'excluded_upload_directories' => $excluded,
             ];
             Console::get()->step('Exporting site tables...', fn () => $this->write_tables($workspace . '/tables.sql', $tables));
@@ -101,10 +107,9 @@ class Export extends Command
             $references = Sql::userReferences(file_get_contents($workspace . '/tables.sql'), $wpdb->prefix);
             Console::get()->step('Exporting members and referenced accounts...', fn () => $this->write_users($workspace . '/users.csv', $references));
             Users::requireReferences($references, Users::read($workspace . '/users.csv'));
-            $files = ['users.csv' => $workspace . '/users.csv', 'tables.sql' => $workspace . '/tables.sql'];
-            if ($uploads !== null && is_dir($uploads['basedir'])) {
-                $files['wp-content/uploads'] = $uploads['basedir'];
-            }
+            $manifest = Console::get()->step('Hashing media for external rsync transfer...', fn () => MediaManifest::capture($uploads, $excluded, $protected));
+            Files::write($workspace . '/media.json', json_encode($manifest, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+            $files = ['users.csv' => $workspace . '/users.csv', 'tables.sql' => $workspace . '/tables.sql', 'media.json' => $workspace . '/media.json'];
             Console::get()->step('Creating and checking the migration package...', fn () => Package::write($output, $files, $meta, $workspace));
             if (!chmod($output, 0600)) {
                 throw new RuntimeException('Cannot secure the exported package permissions.');
@@ -129,6 +134,7 @@ class Export extends Command
             Console::get()->failure($error, export: true);
         }
         Diagnostics::destination(dirname($output));
+        WP_CLI::log('Media bytes are not in the ZIP. Keep a read-only media snapshot matching this export until transfer and verification are complete.');
         WP_CLI::success('Private migration package created: ' . Terminal::safe($output));
     }
 
@@ -196,8 +202,8 @@ class Export extends Command
 
     private function validate_options(array $options): void
     {
-        if (isset($options['exclude-upload-dirs']) && !isset($options['uploads'])) {
-            throw new RuntimeException('--exclude-upload-dirs requires --uploads.');
+        if (array_key_exists('uploads', $options) || array_key_exists('skip-uploads', $options)) {
+            throw new RuntimeException('The upload options have been removed. Media are always transferred externally with rsync.');
         }
         if (!empty($options['usersuffix'])) {
             throw new RuntimeException('SSO user_login values must not be changed; --usersuffix is unsupported.');

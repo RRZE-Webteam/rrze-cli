@@ -131,16 +131,12 @@ final class Wizard extends Command
         });
         $terminal->line('Subsite-owned tables are selected automatically. Main-site custom tables need explicit selection after an ownership check.');
         $tables = $terminal->ask('Additional site-owned tables, comma-separated (optional)');
-        $media = $terminal->choice('Include uploads', ['yes', 'no'], 'yes');
         $options = ['run-dir' => $root];
         if ($tables !== '') {
             $options['custom-tables'] = $tables;
         }
-        if ($media === 'yes') {
-            $options['uploads'] = true;
-            $terminal->line('Upload directories are included unless explicitly excluded. Server configuration and executable files block the export.');
-            $options['exclude-upload-dirs'] = $terminal->ask('Upload subdirectories to exclude, comma-separated (optional; e.g. wp-migrate-db)');
-        }
+        $terminal->line('Media are always transferred separately with rsync. Freeze source writes and retain a matching media snapshot. The ZIP contains a file inventory with checksums.');
+        $options['exclude-upload-dirs'] = $terminal->ask('Upload subdirectories to exclude, comma-separated (optional; e.g. wp-migrate-db)');
         (new Export(static function (array $plan) use ($terminal, $sourceId, $sourceUrl): bool {
             if ($plan['site_id'] !== $sourceId || $plan['source'] !== $sourceUrl) {
                 throw new RuntimeException('The export source changed after confirmation. Start the wizard again to review the current website.');
@@ -167,13 +163,9 @@ final class Wizard extends Command
         });
         $fields = $terminal->ask('Post meta keys with numeric user IDs, comma-separated (optional)');
         $options += ['new_url' => $url, 'uid_fields' => $fields];
-        $withoutUploads = static function (string $limitation) use ($terminal): bool {
-            $terminal->line('Upload limitation: ' . $limitation);
-            $terminal->line(Preflight::MANUAL_UPLOADS_NOTICE);
-            return $terminal->confirm('Continue without uploads');
-        };
+        $terminal->line(Preflight::MEDIA_NOTICE);
         if ($terminal->choice('Next action', ['preview', 'import'], 'preview') === 'preview') {
-            (new Import(null, $withoutUploads))->all([$file], $options + ['dry-run' => true]);
+            (new Import())->all([$file], $options + ['dry-run' => true]);
             return;
         }
         (new Import(static function (array $plan) use ($terminal): bool {
@@ -181,14 +173,11 @@ final class Wizard extends Command
             Console::get()->plan($plan);
             $terminal->line('Existing global users remain unchanged; missing WordPress accounts receive random local passwords. This does not create SSO identities.');
             $terminal->line('The private package copy and journal are retained even after cancellation. A failed import may leave an incomplete site for manual recovery.');
-            if (!$plan['uploads']['skipped'] && !$plan['uploads']['included'] && !$terminal->confirm('Media are absent; a separate transfer is not verified. Continue')) {
-                return false;
-            }
-            if (!$plan['uploads']['skipped'] && ($plan['uploads']['excluded_directories'] ?? []) && !$terminal->confirm('Listed upload directories were excluded and will not be restored. Continue')) {
+            if (($plan['uploads']['excluded_directories'] ?? []) && !$terminal->confirm('Listed upload directories were excluded from transfer and verification. Continue')) {
                 return false;
             }
             return $terminal->identity('New destination', $plan['destination']) && $terminal->confirm('Create the new website and execute this plan now');
-        }, $withoutUploads))->all([$file], $options);
+        }))->all([$file], $options);
     }
 
     private function package(Terminal $terminal, array $options): string

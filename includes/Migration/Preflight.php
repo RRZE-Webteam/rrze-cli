@@ -7,13 +7,12 @@ use RuntimeException;
 /** Shared planning logic for CLI execution, dry-run and the interactive wizard. */
 final class Preflight
 {
-    public const MANUAL_UPLOADS_NOTICE = 'Uploads are skipped. Transfer media separately (for example with rsync), configure the destination upload location and adjust media paths/URLs manually. The general site URL replacement still runs, but upload site-ID paths are not rewritten. Media and custom upload locations are not verified.';
+    public const MEDIA_NOTICE = 'Media are transferred by the administrator with rsync. The import prepares URL mappings and a transfer plan; the run remains media_pending until media verify succeeds.';
 
     public static function build(array $package, string $workspace, array $options): array
     {
-        $skipUploads = $options['skip-uploads'] ?? false;
-        if (!is_bool($skipUploads)) {
-            throw new RuntimeException('Use --skip-uploads as a flag without a value.');
+        if (array_key_exists('skip-uploads', $options) || array_key_exists('uploads', $options)) {
+            throw new RuntimeException('The upload options have been removed. Media are always transferred externally with rsync.');
         }
         $meta = $package['meta'];
         Files::memory($package['files']['tables.sql']['bytes'] * 6 + $package['files']['users.csv']['bytes'] * 8 + 16777216);
@@ -28,8 +27,9 @@ final class Preflight
                 throw new RuntimeException('Invalid numeric user-reference meta key.');
             }
         }
-        $uploads = array_filter($package['files'], static fn ($name) => str_starts_with($name, 'wp-content/uploads/'), ARRAY_FILTER_USE_KEY);
-        $destination = Destination::inspect($target, array_sum(array_column($uploads, 'bytes')), $skipUploads);
+        $media = $package['media'];
+        $uploads = $media['files'];
+        $destination = Destination::inspect($target, array_sum(array_column($uploads, 'bytes')));
         $mapping = [];
         foreach ($tables as $table) {
             $mapped = $destination['prefix'] . substr($table, strlen($meta['db_prefix']));
@@ -41,7 +41,7 @@ final class Preflight
         // Use exactly the same table-reference checks and mapping as execution.
         Sql::map(file_get_contents($workspace . '/tables.sql'), $mapping);
         $report = [
-            'plan_version' => 1, 'package_format_version' => $meta['format_version'],
+            'plan_version' => 2, 'package_format_version' => $meta['format_version'],
             'source' => $source['url'], 'destination' => $target['url'],
             'action' => 'create_new_site', 'overwrite' => false,
             'destination_details' => $destination, 'tables' => $mapping,
@@ -51,11 +51,11 @@ final class Preflight
                 'action' => $row['target_id'] === null ? 'create_wordpress_user' : (Users::isMember($row) ? 'add_site_membership' : 'map_existing_user'),
                 'target_id' => $row['target_id'],
             ], $users),
-            'uploads' => ['included' => $meta['uploads_included'], 'skipped' => $skipUploads,
-                'transfer' => $meta['uploads_included'] && !$skipUploads, 'verified' => false,
-                'manual_transfer_required' => $skipUploads || !$meta['uploads_included'],
+            'uploads' => ['transport' => 'rsync', 'verified' => false, 'status' => 'pending',
+                'manual_transfer_required' => true, 'source_directory' => $media['source_directory'],
+                'source_baseurl' => $media['source_baseurl'],
                 'files' => count($uploads), 'bytes' => array_sum(array_column($uploads, 'bytes')),
-                'excluded_directories' => $meta['excluded_upload_directories'] ?? []],
+                'excluded_directories' => $media['excluded_directories']],
             'user_reference_fields' => $fields,
             'limitations' => [
                 'Site ID and available disk space are estimates, not reservations; execution repeats these checks.',
@@ -63,15 +63,11 @@ final class Preflight
                 'Database server disk space, extension compatibility and real SSO login require operational verification.',
             ],
         ];
-        if ($skipUploads) {
-            $report['limitations'][] = self::MANUAL_UPLOADS_NOTICE;
-        } elseif (!$meta['uploads_included']) {
-            $report['limitations'][] = 'Media are not included. A separate media transfer is not verified.';
-        }
+        $report['limitations'][] = self::MEDIA_NOTICE;
         if ($report['uploads']['excluded_directories']) {
             $report['limitations'][] = 'Explicitly excluded upload directories are not transferred or verified.';
         }
-        return compact('meta', 'source', 'target', 'users', 'fields', 'mapping', 'destination', 'report', 'skipUploads');
+        return compact('meta', 'source', 'target', 'users', 'fields', 'mapping', 'destination', 'report', 'media');
     }
 
     public static function tables(string $filename, array $meta): array

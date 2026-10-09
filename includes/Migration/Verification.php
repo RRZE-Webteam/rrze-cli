@@ -82,17 +82,5 @@ final class Verification
         } finally {
             restore_current_blog();
         }
-        if ($plan['skipUploads']) {
-            return;
-        }
-        foreach ($package['files'] as $name => $entry) {
-            if (!str_starts_with($name, 'wp-content/uploads/')) {
-                continue;
-            }
-            $file = $plan['destination']['uploads_directory'] . '/' . substr($name, strlen('wp-content/uploads/'));
-            if (is_link($file) || !is_file($file) || filesize($file) !== $entry['bytes'] || hash_file('sha256', $file) !== $entry['sha256']) {
-                throw new RuntimeException('Imported media verification failed.');
-            }
-        }
     }
 }

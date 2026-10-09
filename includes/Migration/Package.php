@@ -9,7 +9,7 @@ use ZipArchive;
 final class Package
 {
     public const FORMAT = 'rrze-cli-migration';
-    public const VERSION = 1;
+    public const VERSION = 2;
     public const LIMITS = [
         'archive' => 2147483648, 'total' => 4294967296, 'file' => 536870912,
         'sql' => 67108864, 'csv' => 16777216, 'metadata' => 4194304,
@@ -31,7 +31,7 @@ final class Package
                 throw new RuntimeException('Unsafe path in the migration package. Path: ' . Terminal::safe($name));
             }
         }
-        if (!$directory && in_array($path, ['site.json', 'users.csv', 'tables.sql'], true)) {
+        if (!$directory && in_array($path, ['site.json', 'users.csv', 'tables.sql', 'media.json'], true)) {
             return $path;
         }
         if ($directory && in_array($path, ['wp-content', 'wp-content/uploads'], true)) {
@@ -51,13 +51,13 @@ final class Package
         if (!is_string($meta['url'] ?? null) || !is_string($meta['db_prefix'] ?? null)
             || !preg_match('/^[A-Za-z0-9_]+$/D', $meta['db_prefix'])
             || !is_int($meta['blog_id'] ?? null) || $meta['blog_id'] < 1
-            || !is_bool($meta['uploads_included'] ?? null) || !is_array($meta['tables'] ?? null)
+            || ($meta['media_transport'] ?? null) !== 'rsync' || !is_array($meta['tables'] ?? null)
             || !array_is_list($meta['tables']) || !$meta['tables'] || !is_array($meta['files'] ?? null)) {
             throw new RuntimeException('Invalid migration metadata.');
         }
         SiteAddress::parse($meta['url']);
         $excluded = $meta['excluded_upload_directories'] ?? [];
-        if (!is_array($excluded) || (!$meta['uploads_included'] && $excluded)) {
+        if (!is_array($excluded)) {
             throw new RuntimeException('Invalid excluded upload directory metadata.');
         }
         UploadExclusions::validate($excluded);
@@ -75,8 +75,8 @@ final class Package
                 || !is_string($file['sha256'] ?? null) || !preg_match('/^[a-f0-9]{64}$/D', $file['sha256'])) {
                 throw new RuntimeException('Invalid file manifest.');
             }
-            if (!$meta['uploads_included'] && str_starts_with($name, 'wp-content/uploads/')) {
-                throw new RuntimeException('Upload manifest contradicts the package metadata.');
+            if (!in_array($name, ['tables.sql', 'users.csv', 'media.json'], true)) {
+                throw new RuntimeException('Media payloads are no longer supported in packages. Create a new export for external rsync transfer.');
             }
             if (UploadExclusions::contains($name, $excluded)) {
                 throw new RuntimeException('Upload manifest contains a file declared as excluded.');
@@ -124,7 +124,7 @@ final class Package
                     throw new RuntimeException('Links, special files, encryption or unsupported compression in the migration package.');
                 }
                 $limit = match ($name) {
-                    'site.json' => $limits['metadata'], 'users.csv' => $limits['csv'], 'tables.sql' => $limits['sql'], default => $limits['file'],
+                    'media.json' => MediaManifest::MAX_BYTES, 'site.json' => $limits['metadata'], 'users.csv' => $limits['csv'], 'tables.sql' => $limits['sql'], default => $limits['file'],
                 };
                 $total += $stat['size'];
                 if ($stat['size'] > $limit || $total > $limits['total']
@@ -145,8 +145,8 @@ final class Package
                     $parent = dirname($parent);
                 }
             }
-            if (array_diff(['site.json', 'users.csv', 'tables.sql'], array_keys($entries))) {
-                throw new RuntimeException('Missing required site.json, users.csv or tables.sql.');
+            if (array_diff(['site.json', 'users.csv', 'tables.sql', 'media.json'], array_keys($entries))) {
+                throw new RuntimeException('Missing required site.json, users.csv, tables.sql or media.json. Create a new export with this version of rrze-cli.');
             }
             $json = $zip->getFromName('site.json', $limits['metadata'] + 1);
             $meta = json_decode($json, true, 64, JSON_THROW_ON_ERROR);
@@ -209,7 +209,12 @@ final class Package
                     }
                 }
             }
-            return ['meta' => $meta, 'files' => $files, 'bytes' => $total];
+            Files::memory($files['media.json']['bytes'] * 8 + 16777216);
+            $media = MediaManifest::read($zip->getFromName('media.json', MediaManifest::MAX_BYTES + 1));
+            if ($media['excluded_directories'] !== ($meta['excluded_upload_directories'] ?? [])) {
+                throw new RuntimeException('The media exclusions contradict the package metadata.');
+            }
+            return ['meta' => $meta, 'files' => $files, 'bytes' => $total, 'media' => $media];
         } finally {
             $zip->close();
         }
@@ -220,27 +225,15 @@ final class Package
         if (!class_exists(ZipArchive::class)) {
             throw new RuntimeException('Migration packages require the PHP zip extension.');
         }
-        $excluded = $meta['excluded_upload_directories'] ?? [];
-        UploadExclusions::validate($excluded);
         $files = [];
+        if (array_diff(['tables.sql', 'users.csv', 'media.json'], array_keys($paths))) {
+            throw new RuntimeException('A version 2 export requires site data and a media inventory.');
+        }
         foreach ($paths as $name => $path) {
-            if (is_link($path)) {
-                throw new RuntimeException('Symbolic links cannot be exported.');
+            if (!in_array($name, ['tables.sql', 'users.csv', 'media.json'], true) || is_link($path) || !is_file($path)) {
+                throw new RuntimeException('Only tables.sql, users.csv and media.json can be exported. Media bytes are transferred externally.');
             }
-            if (is_dir($path)) {
-                $entries = new \RecursiveCallbackFilterIterator(
-                    new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS),
-                    static fn ($entry) => !UploadExclusions::contains($name . '/' . substr($entry->getPathname(), strlen($path) + 1), $excluded)
-                );
-                foreach (new \RecursiveIteratorIterator($entries) as $entry) {
-                    if ($entry->isLink() || !$entry->isFile()) {
-                        throw new RuntimeException('Links and special files cannot be exported.');
-                    }
-                    $files[$name . '/' . substr($entry->getPathname(), strlen($path) + 1)] = $entry->getPathname();
-                }
-            } else {
-                $files[$name] = $path;
-            }
+            $files[$name] = $path;
         }
         ksort($files);
         $meta['format'] = self::FORMAT;
@@ -254,7 +247,7 @@ final class Package
             self::path($name);
             $bytes = filesize($path);
             $total += $bytes;
-            $limit = match ($name) { 'tables.sql' => self::LIMITS['sql'], 'users.csv' => self::LIMITS['csv'], default => self::LIMITS['file'] };
+            $limit = match ($name) { 'media.json' => MediaManifest::MAX_BYTES, 'tables.sql' => self::LIMITS['sql'], 'users.csv' => self::LIMITS['csv'], default => self::LIMITS['file'] };
             if ($bytes === false || $bytes > $limit || $total > self::LIMITS['total']) {
                 throw new RuntimeException('The export exceeds a supported file size limit.');
             }

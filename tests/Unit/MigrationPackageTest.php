@@ -22,9 +22,9 @@ final class MigrationPackageTest extends TestCase
 
     private function archive(array $entries = [], ?callable $changeMeta = null): string
     {
-        $entries += ['users.csv' => 'ID,user_login,user_email,role', 'tables.sql' => 'controlled SQL fixture'];
-        $meta = ['format' => Package::FORMAT, 'format_version' => 1, 'url' => 'https://source.test/site/',
-            'db_prefix' => 'wp_2_', 'blog_id' => 2, 'tables' => ['wp_2_posts'], 'uploads_included' => true, 'files' => []];
+        $entries += ['media.json' => json_encode(['version' => 1, 'transport' => 'rsync', 'source_directory' => '/source/uploads', 'source_baseurl' => 'https://source.test/uploads', 'excluded_directories' => [], 'protected_directories' => [], 'files' => []]), 'users.csv' => 'ID,user_login,user_email,role', 'tables.sql' => 'controlled SQL fixture'];
+        $meta = ['format' => Package::FORMAT, 'format_version' => Package::VERSION, 'url' => 'https://source.test/site/',
+            'db_prefix' => 'wp_2_', 'blog_id' => 2, 'tables' => ['wp_2_posts'], 'media_transport' => 'rsync', 'files' => []];
         foreach ($entries as $name => $data) {
             $meta['files'][$name] = ['bytes' => strlen($data), 'sha256' => hash('sha256', $data)];
         }
@@ -43,13 +43,33 @@ final class MigrationPackageTest extends TestCase
 
     public function testVersionedPackageIsStreamedIntoPrivateFilesAndVerified(): void
     {
-        $zip = $this->archive(['wp-content/uploads/2026/Grüße.jpg' => 'image bytes']);
+        $zip = $this->archive();
         mkdir($this->workspace . '/extract', 0700);
         $package = Package::read($zip, $this->workspace . '/extract');
-        self::assertSame(1, $package['meta']['format_version']);
-        self::assertSame('image bytes', file_get_contents($this->workspace . '/extract/wp-content/uploads/2026/Grüße.jpg'));
+        self::assertSame(2, $package['meta']['format_version']);
+        self::assertFileExists($this->workspace . '/extract/media.json');
+        self::assertDirectoryDoesNotExist($this->workspace . '/extract/wp-content');
         self::assertSame(0600, fileperms($this->workspace . '/extract/tables.sql') & 0777);
-        self::assertSame(hash('sha256', 'image bytes'), $package['files']['wp-content/uploads/2026/Grüße.jpg']['sha256']);
+        self::assertSame('rsync', $package['media']['transport']);
+    }
+
+    public function testWriterPublishesOnlyDataAndInventoryAndRejectsMediaPayloads(): void
+    {
+        $package = Package::read($this->archive(), null);
+        $paths = [];
+        foreach (['tables.sql' => 'SQL fixture', 'users.csv' => 'CSV fixture', 'media.json' => json_encode($package['media'])] as $name => $contents) {
+            $paths[$name] = $this->workspace . '/' . $name;
+            file_put_contents($paths[$name], $contents);
+        }
+        $output = $this->workspace . '/new.zip';
+        fclose(Files::output($output));
+        Package::write($output, $paths, $package['meta'], $this->workspace);
+        $written = Package::read($output, null);
+        self::assertCount(4, $written['files']);
+        self::assertSame($package['media'], $written['media']);
+        $paths['wp-content/uploads/photo.jpg'] = $paths['users.csv'];
+        $this->expectExceptionMessage('Media bytes are transferred externally');
+        Package::write($output, $paths, $package['meta'], $this->workspace);
     }
 
     #[DataProvider('unsafePaths')]
@@ -83,7 +103,7 @@ final class MigrationPackageTest extends TestCase
     {
         return [[['format_version' => 99]], [['format_version' => null]], [['format' => 'foreign']],
             [['blog_id' => '2']], [['tables' => ['wp_2_posts', 'wp_2_posts']]], [['tables' => [1]]],
-            [['files' => []]], [['db_prefix' => '../']], [['uploads_included' => 'yes']]];
+            [['files' => []]], [['db_prefix' => '../']], [['media_transport' => 'zip']], [['format_version' => 1]]];
     }
 
     public function testChecksumMismatchIsRejected(): void
@@ -102,7 +122,7 @@ final class MigrationPackageTest extends TestCase
             $meta['excluded_upload_directories'] = ['backups'];
             return $meta;
         });
-        $this->expectExceptionMessage('file declared as excluded');
+        $this->expectExceptionMessage('Media payloads are no longer supported');
         Package::read($file, null);
     }
 

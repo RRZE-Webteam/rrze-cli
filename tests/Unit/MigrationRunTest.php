@@ -154,25 +154,64 @@ final class MigrationRunTest extends TestCase
         self::assertSame('running', json_decode(file_get_contents($path), true)['status'], 'Status reads must not rewrite the checkpoint.');
     }
 
-    public function testUploadsCannotBeSkippedWithoutAnExplicitPlan(): void
+    public function testMediaCannotBeMarkedVerifiedBeforeVerification(): void
     {
         $run = Run::create($this->root);
         try {
-            $this->expectExceptionMessage('explicit manual-transfer plan');
-            $run->skipUploads();
+            $this->expectExceptionMessage('Media checks must finish');
+            $run->mediaVerified([], false);
         } finally {
             $run->finish('failed');
         }
     }
 
-    public function testUploadsCannotBeMarkedVerifiedBeforeVerification(): void
+    public function testFailedImportsCannotResumeThroughMediaVerification(): void
     {
         $run = Run::create($this->root);
+        $run->finish('failed');
+        $this->expectExceptionMessage('Only a successful site import');
+        Run::openMedia($this->root, $run->id);
+    }
+
+    public function testExternalMediaStateIsLockedRepeatableAndCannotClaimPrematureCompletion(): void
+    {
+        $run = Run::create($this->root);
+        $run->plan(['source' => ['url' => 'https://source.test/'], 'target' => ['url' => 'https://target.test/'],
+            'destination' => ['network_id' => 1, 'uploads_directory' => '/target/media'], 'mapping' => [], 'fields' => [],
+            'report' => ['uploads' => ['transport' => 'rsync', 'verified' => false]]], 'installation');
+        foreach (['verify', 'cleanup'] as $step) {
+            $run->begin($step);
+            $run->done();
+        }
         try {
-            $this->expectExceptionMessage('before result verification');
-            $run->verifiedUploads();
+            $run->finish('completed');
+            self::fail('Site data alone cannot complete an external media migration.');
+        } catch (RuntimeException $error) {
+            self::assertStringContainsString('External media verification', $error->getMessage());
+        }
+        $run->finish('media_pending');
+        $check = Run::openMedia($this->root, $run->id);
+        try {
+            try {
+                Run::openMedia($this->root, $run->id);
+                self::fail('Concurrent checks must be rejected.');
+            } catch (RuntimeException $error) {
+                self::assertStringContainsString('active', $error->getMessage());
+            }
+            $check->begin('verify_media');
+            $check->done();
+            $check->mediaVerified(['files' => 1], false);
+            $check->finish('completed');
+            self::assertSame('completed', Run::read($this->root, $run->id)['status']);
+            $repeat = Run::openMedia($this->root, $run->id);
+            $repeat->finish('media_pending');
+            $state = Run::read($this->root, $run->id);
+            self::assertSame('media_pending', $state['status']);
+            self::assertFalse($state['uploads']['verified']);
+            self::assertTrue($state['uploads']['manual_transfer_required']);
+            self::assertArrayNotHasKey('media_verification', $state);
         } finally {
-            $run->finish('failed');
+            unset($check);
         }
     }
 

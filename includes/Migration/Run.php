@@ -7,7 +7,7 @@ use RuntimeException;
 /** Private, durable checkpoints. Never serialize exceptions, SQL, profiles or credentials. */
 final class Run
 {
-    public const STEPS = ['prepare', 'acquire_lock', 'recheck', 'create_site', 'import_tables', 'replace_urls', 'configure_site', 'import_users', 'remap_references', 'import_uploads', 'finalize', 'verify', 'cleanup'];
+    public const STEPS = ['prepare', 'acquire_lock', 'recheck', 'create_site', 'import_tables', 'replace_urls', 'configure_site', 'import_users', 'remap_references', 'import_uploads', 'prepare_media', 'verify_media', 'finalize', 'verify', 'cleanup'];
     public readonly string $id;
     public readonly string $directory;
     private array $state;
@@ -15,31 +15,57 @@ final class Run
     private bool $closed = false;
     private string $reserve;
 
-    private function __construct(string $root)
+    private function __construct(string $root, ?string $existing = null)
     {
-        $this->id = bin2hex(random_bytes(16));
+        $this->id = $existing ?? bin2hex(random_bytes(16));
         $this->directory = $root . '/' . $this->id;
-        if (!mkdir($this->directory, 0700)) {
-            throw new RuntimeException('Cannot create the private migration run directory.');
+        if ($existing !== null) {
+            self::read($root, $existing);
+            $this->handle = fopen($this->directory . '/active.lock', 'rb');
+            if (!$this->handle || !flock($this->handle, LOCK_EX | LOCK_NB)) {
+                if (is_resource($this->handle)) { fclose($this->handle); }
+                throw new RuntimeException('This migration run is active. Wait before checking media.');
+            }
+            try {
+                $this->state = self::read($root, $existing);
+                unset($this->state['active'], $this->state['observed_status']);
+                if (!in_array($this->state['status'], ['media_pending', 'completed'], true)
+                    || ($this->state['uploads']['transport'] ?? null) !== 'rsync') {
+                    throw new RuntimeException('Only a successful site import with an external media plan can be checked. Read status for recovery guidance.');
+                }
+                $this->state['status'] = 'media_pending';
+                $this->state['uploads']['verified'] = false;
+                $this->state['uploads']['status'] = 'pending';
+                $this->state['uploads']['manual_transfer_required'] = true;
+                unset($this->state['steps']['verify_media'], $this->state['media_verification']);
+                $this->save();
+            } catch (\Throwable $error) {
+                fclose($this->handle);
+                throw $error;
+            }
+        } else {
+            if (!mkdir($this->directory, 0700)) {
+                throw new RuntimeException('Cannot create the private migration run directory.');
+            }
+            $this->handle = Files::output($this->directory . '/active.lock');
+            if (!flock($this->handle, LOCK_EX | LOCK_NB)) {
+                throw new RuntimeException('Cannot lock the new migration journal.');
+            }
+            $this->state = [
+                'journal_version' => 1, 'run_id' => $this->id, 'status' => 'running',
+                'started_at' => gmdate('c'), 'updated_at' => gmdate('c'), 'step' => null,
+                'steps' => [], 'site_id' => null, 'users' => [], 'pending_user' => null,
+                'package_sha256' => null,
+            ];
+            $this->save();
         }
-        $this->handle = Files::output($this->directory . '/active.lock');
-        if (!flock($this->handle, LOCK_EX | LOCK_NB)) {
-            throw new RuntimeException('Cannot lock the new migration journal.');
-        }
-        $this->state = [
-            'journal_version' => 1, 'run_id' => $this->id, 'status' => 'running',
-            'started_at' => gmdate('c'), 'updated_at' => gmdate('c'), 'step' => null,
-            'steps' => [], 'site_id' => null, 'users' => [], 'pending_user' => null,
-            'uploaded_files' => 0, 'package_sha256' => null,
-        ];
-        $this->save();
         $this->reserve = str_repeat('x', 65536);
         register_shutdown_function(function (): void {
             $this->reserve = '';
             if (!$this->closed) {
                 // Also runs on native exit()/fatal errors. SIGKILL remains observable as an unlocked running journal.
                 try {
-                    $this->finish('interrupted');
+                    $this->finish(($this->state['status'] ?? '') === 'media_pending' ? 'media_pending' : 'interrupted');
                 } catch (\Throwable $ignored) {
                     // Last durable checkpoint remains authoritative; never log the fatal error text.
                 }
@@ -81,6 +107,31 @@ final class Run
     public static function create(string $root): self
     {
         return new self($root);
+    }
+
+    public static function openMedia(string $root, string $id): self
+    {
+        return new self($root, $id);
+    }
+
+    public function mediaPlan(array $layout, bool $accessRequired): void
+    {
+        $this->state['uploads_directory'] = $layout['directory'];
+        $this->state['media_destination'] = $layout;
+        $this->state['uploads']['access_check_required'] = $accessRequired;
+        $this->save();
+    }
+
+    public function mediaVerified(array $result, bool $accessChecked): void
+    {
+        if (($this->state['steps']['verify_media']['status'] ?? null) !== 'completed') {
+            throw new RuntimeException('Media checks must finish before recording verification.');
+        }
+        $this->state['uploads']['verified'] = true;
+        $this->state['uploads']['status'] = 'verified';
+        $this->state['uploads']['manual_transfer_required'] = false;
+        $this->state['media_verification'] = $result + ['checked_at' => gmdate('c'), 'access_checked_by_operator' => $accessChecked];
+        $this->save();
     }
 
     public function package(string $input): string
@@ -144,29 +195,6 @@ final class Run
         $this->save();
     }
 
-    public function skipUploads(): void
-    {
-        if (($this->state['uploads']['skipped'] ?? false) !== true) {
-            throw new RuntimeException('Skipping uploads requires an explicit manual-transfer plan.');
-        }
-        $this->begin('import_uploads');
-        $this->state['steps']['import_uploads']['status'] = 'skipped';
-        $this->state['steps']['import_uploads']['reason'] = 'manual_transfer';
-        $this->state['steps']['import_uploads']['finished_at'] = gmdate('c');
-        $this->save();
-    }
-
-    public function verifiedUploads(): void
-    {
-        if (($this->state['steps']['verify']['status'] ?? null) !== 'completed') {
-            throw new RuntimeException('Uploads cannot be marked verified before result verification.');
-        }
-        if (!empty($this->state['uploads']['transfer'])) {
-            $this->state['uploads']['verified'] = true;
-            $this->save();
-        }
-    }
-
     public function workspace(string $path): void
     {
         $this->state['workspace'] = $path;
@@ -203,20 +231,18 @@ final class Run
         $this->save();
     }
 
-    public function upload(): void
-    {
-        $this->state['uploaded_files']++;
-        $this->save();
-    }
-
     public function finish(string $status): void
     {
-        if (!in_array($status, ['completed', 'failed', 'interrupted'], true)) {
+        if (!in_array($status, ['completed', 'media_pending', 'failed', 'interrupted'], true)) {
             throw new RuntimeException('Invalid migration result.');
         }
-        if ($status === 'completed' && (($this->state['steps']['verify']['status'] ?? null) !== 'completed'
+        if (in_array($status, ['completed', 'media_pending'], true) && (($this->state['steps']['verify']['status'] ?? null) !== 'completed'
             || ($this->state['steps']['cleanup']['status'] ?? null) !== 'completed')) {
             throw new RuntimeException('Verification and cleanup must complete before migration success.');
+        }
+        if ($status === 'completed' && ($this->state['uploads']['transport'] ?? null) === 'rsync'
+            && (($this->state['steps']['verify_media']['status'] ?? null) !== 'completed' || empty($this->state['uploads']['verified']))) {
+            throw new RuntimeException('External media verification must complete before migration success.');
         }
         $this->state['status'] = $status;
         $this->save();
@@ -262,7 +288,7 @@ final class Run
             $active = !flock($handle, LOCK_EX | LOCK_NB);
             $state = json_decode(file_get_contents($directory . '/run.json'), true, 64, JSON_THROW_ON_ERROR);
             if (!is_array($state) || ($state['journal_version'] ?? null) !== 1 || ($state['run_id'] ?? null) !== $id
-                || !in_array($state['status'] ?? null, ['running', 'completed', 'failed', 'interrupted'], true)
+                || !in_array($state['status'] ?? null, ['running', 'completed', 'media_pending', 'failed', 'interrupted'], true)
                 || !is_array($state['steps'] ?? null) || !array_key_exists('site_id', $state)
                 || ($state['site_id'] !== null && (!is_int($state['site_id']) || $state['site_id'] < 2))
                 || !array_key_exists('package_sha256', $state)
@@ -280,9 +306,13 @@ final class Run
                     throw new RuntimeException('Invalid skipped migration step checkpoint.');
                 }
             }
-            if ($state['status'] === 'completed' && (($state['steps']['verify']['status'] ?? null) !== 'completed'
+            if (in_array($state['status'], ['completed', 'media_pending'], true) && (($state['steps']['verify']['status'] ?? null) !== 'completed'
                 || ($state['steps']['cleanup']['status'] ?? null) !== 'completed')) {
                 throw new RuntimeException('Incomplete journal cannot establish migration success.');
+            }
+            if ($state['status'] === 'completed' && ($state['uploads']['transport'] ?? null) === 'rsync'
+                && (($state['steps']['verify_media']['status'] ?? null) !== 'completed' || empty($state['uploads']['verified']))) {
+                throw new RuntimeException('Incomplete media checkpoint cannot establish migration success.');
             }
             $state['active'] = $active;
             $state['observed_status'] = $active ? 'active' : ($state['status'] === 'running' ? 'interrupted_or_unfinished' : $state['status']);

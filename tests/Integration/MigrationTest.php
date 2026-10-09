@@ -54,7 +54,7 @@ final class MigrationTest extends TestCase
         self::assertSame('add_site_membership', $users['sso0001']['action']);
         self::assertSame(4, $users['sso0001']['target_id']);
         self::assertSame('create_wordpress_user', $users['sso0002']['action']);
-        self::assertTrue($plan['uploads']['included']);
+        self::assertSame('rsync', $plan['uploads']['transport']);
         self::assertGreaterThan(0, $plan['uploads']['files']);
         self::assertStringNotContainsString('user_pass', $json);
         self::assertStringNotContainsString('synthetic-session-secret', $json);
@@ -92,8 +92,7 @@ final class MigrationTest extends TestCase
         self::assertSame($content['expected_parent'], $content['parent']);
         self::assertSame($content['post_id'], $content['attachment_parent']);
         self::assertSame($source['categories'], $content['categories']);
-        self::assertSame($source['media_hash'], $content['media_hash']);
-        self::assertNotNull($content['media_hash']);
+        self::assertNull($content['media_hash'], 'The import must not copy media.');
         self::assertSame('Custom table Grüße', $content['custom']);
         self::assertSame(4, $content['shared'], 'Existing sso0001 must be mapped from source ID 2 to target ID 4.');
         self::assertSame(5, $content['author'], 'New sso0002 must be mapped from source ID 3 to target ID 5.');
@@ -377,29 +376,6 @@ PHPHOOK);
         }
     }
 
-    public function testUploadsAtTheMediaRootBecomeReadableOutsideThePrivateWorkspace(): void
-    {
-        $name = $this->modifiedPackage(static function (ZipArchive $zip) {
-            $remove = [];
-            for ($index = 0; $index < $zip->numFiles; $index++) {
-                $entry = $zip->getNameIndex($index);
-                if (str_starts_with($entry, 'wp-content/uploads/')) {
-                    $remove[] = $entry;
-                }
-            }
-            foreach ($remove as $entry) {
-                $zip->deleteName($entry);
-            }
-            $zip->addFromString('wp-content/uploads/root-media.txt', 'public fixture media');
-        });
-        self::$sandbox->wp('target', ['rrze-migration', 'import', 'all', $name, '--new_url=http://target.test/root-media/']);
-        $site = array_values(array_filter(self::$sandbox->fixture('target', 'sites'), fn ($site) => $site['path'] === '/root-media/'))[0];
-        $file = self::$sandbox->root . '/target/wp-content/uploads/sites/' . $site['id'] . '/root-media.txt';
-        self::assertSame('public fixture media', file_get_contents($file));
-        self::assertSame(0644, fileperms($file) & 0777);
-        $this->assertWorkspaceClean();
-    }
-
     public function testLateTableConflictIsCheckedBeforeWordPressInitialization(): void
     {
         $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/late-conflict.php';
@@ -436,19 +412,19 @@ PHPHOOK);
         $completed = [];
         foreach ($runs as $file) {
             $state = json_decode(file_get_contents($file), true, 64, JSON_THROW_ON_ERROR);
-            if ($state['status'] === 'completed') {
+            if ($state['status'] === 'media_pending') {
                 $completed[] = $state;
             }
         }
         self::assertNotEmpty($completed);
         $state = $this->runStatus($completed[0]['run_id']);
-        self::assertSame('completed', $state['observed_status']);
+        self::assertSame('media_pending', $state['observed_status']);
         self::assertSame('completed', $state['steps']['verify']['status']);
         self::assertSame('completed', $state['steps']['cleanup']['status']);
         self::assertTrue($state['package_intact']);
         self::assertFalse($state['active']);
-        self::assertTrue($state['uploads']['verified']);
-        self::assertFalse($state['uploads']['skipped']);
+        self::assertFalse($state['uploads']['verified']);
+        self::assertSame('rsync', $state['uploads']['transport']);
         self::assertSame(0600, fileperms($state['preserved_package']) & 0777);
     }
 
@@ -456,7 +432,7 @@ PHPHOOK);
     {
         $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/fail-phase.php';
         $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
-        foreach (['import_tables', 'replace_urls', 'configure_site', 'import_users', 'remap_references', 'import_uploads', 'finalize', 'verify'] as $phase) {
+        foreach (['import_tables', 'replace_urls', 'configure_site', 'import_users', 'remap_references', 'prepare_media', 'finalize', 'verify'] as $phase) {
             file_put_contents($hook, '<?php add_action("rrze_migration_after_step", static function ($step) { if ($step === ' . var_export($phase, true) . ') { throw new RuntimeException("synthetic-secret-not-for-journal"); } });');
             try {
                 $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/fault-' . $phase . '/', '--uid_fields=_fixture_user']);
@@ -521,7 +497,7 @@ PHPHOOK);
         $content = self::$sandbox->fixture('target', 'content', [(string) $restoredState['site_id']]);
         self::assertSame($user['id'], $content['author']);
         self::assertSame('Migration fixture', $content['title']);
-        self::assertNotNull($content['media_hash']);
+        self::assertNull($content['media_hash']);
         self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
         self::assertTrue($this->runStatus($state['run_id'])['package_intact']);
     }
@@ -592,20 +568,18 @@ PHPHOOK);
         }
     }
 
-    public function testFinalVerificationRejectsChangedProfilesAndDamagedMedia(): void
+    public function testFinalVerificationRejectsChangedProfiles(): void
     {
         $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/fail-verification.php';
         $profile = trim(self::$sandbox->wp('target', ['user', 'meta', 'get', '4', 'first_name']));
         $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
-        foreach (['profile', 'media'] as $kind) {
-            $mutation = $kind === 'profile'
-                ? 'update_user_meta(4, "first_name", "unexpected fixture profile change");'
-                : '$state = json_decode(file_get_contents(RRZE_MIGRATION_RUN_DIR . "/" . $id . "/run.json"), true); $files = glob($state["uploads_directory"] . "/*/*/fixture.png"); file_put_contents($files[0], "damaged fixture media");';
+        foreach (['profile'] as $kind) {
+            $mutation = 'update_user_meta(4, "first_name", "unexpected fixture profile change");';
             file_put_contents($hook, '<?php add_action("rrze_migration_before_step", static function ($step, $id) { if ($step === "verify") { ' . $mutation . ' } }, 10, 2);');
             try {
                 $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/verify-' . $kind . '/']);
                 self::assertNotSame(0, $result['code']);
-                self::assertStringContainsString($kind === 'profile' ? 'existing global user changed' : 'media verification failed', $result['stderr']);
+                self::assertStringContainsString('existing global user changed', $result['stderr']);
                 $state = $this->runStatus($this->runId($result));
                 self::assertSame('failed', $state['status']);
                 self::assertSame('verify', $state['failure_step']);
@@ -700,7 +674,7 @@ PHPHOOK);
         $this->assertWorkspaceClean();
     }
 
-    public function testExportBySiteIdUsesTheSelectedTablesUsersUploadsAndPluginContext(): void
+    public function testExportBySiteIdUsesTheSelectedTablesUsersMediaInventoryAndPluginContext(): void
     {
         $url = trim(self::$sandbox->wp('source', ['option', 'get', 'home', '--url=http://source.test/source/']));
         $hook = self::$sandbox->root . '/source/wp-content/mu-plugins/source-context.php';
@@ -717,7 +691,7 @@ PHPHOOK);
             foreach (['direct', 'wizard-option', 'wizard-question'] as $mode) {
                 $filename = 'id-' . $mode . '.zip';
                 if ($mode === 'direct') {
-                    $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', $filename, '--site-id=2', '--uploads']);
+                    $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', $filename, '--site-id=2']);
                 } else {
                     $arguments = ['rrze-migration', 'wizard', 'export'];
                     $dialogue = [];
@@ -728,7 +702,7 @@ PHPHOOK);
                     }
                     $dialogue = [...$dialogue,
                         ['Export this website', 'yes'], ['Private migration directory', ''],
-                        ['New ZIP filename', $filename], ['Additional site-owned tables', ''], ['Include uploads', 'yes'],
+                        ['New ZIP filename', $filename], ['Additional site-owned tables', ''],
                         ['Upload subdirectories to exclude', ''], ['Type that complete URL', $url], ['Create this export package now', 'yes'],
                     ];
                     $result = self::$sandbox->terminal('source', $arguments, $dialogue);
@@ -757,9 +731,10 @@ PHPHOOK);
                 self::assertStringContainsString('sso0002', $csv);
                 self::assertStringContainsString('booted-site-2', $csv);
                 self::assertStringNotContainsString('synthetic-test-password', $csv);
-                $images = array_values(array_filter(array_keys($meta['files']), static fn ($name) => str_ends_with($name, '/fixture.png')));
+                $media = json_decode($zip->getFromName('media.json'), true);
+                $images = array_values(array_filter(array_keys($media['files']), static fn ($name) => str_ends_with($name, '/fixture.png')));
                 self::assertCount(1, $images);
-                self::assertNotFalse($zip->getFromName($images[0]));
+                self::assertFalse($zip->getFromName($images[0]));
                 $zip->close();
                 self::assertSame($before, self::$sandbox->fixture('source', 'state'));
                 $this->assertWorkspaceClean();
@@ -852,7 +827,7 @@ PHPHOOK);
         }
     }
 
-    public function testWizardExportsSelectedSourceWithUploadsAndProtectsExistingOutput(): void
+    public function testWizardExportsSelectedSourceWithMediaInventoryAndProtectsExistingOutput(): void
     {
         $source = 'http://source.test/source/';
         $url = trim(self::$sandbox->wp('source', ['option', 'get', 'home', '--url=' . $source]));
@@ -861,13 +836,13 @@ PHPHOOK);
         $dialogue = [
             ['Source website ID', ''], ['Export this website', 'yes'],
             ['Private migration directory', ''],
-            ['New ZIP filename', $name], ['Additional site-owned tables', ''], ['Include uploads', ''],
+            ['New ZIP filename', $name], ['Additional site-owned tables', ''],
             ['Upload subdirectories to exclude', ''],
             ['Type that complete URL', $url], ['Create this export package now', 'yes'],
         ];
         $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=' . $source], $dialogue);
         self::assertSame(0, $result['code'], $result['stdout']);
-        self::assertSame(9, $result['answers']);
+        self::assertSame(8, $result['answers']);
         $packages = glob(self::$sandbox->root . '/runs-source/export-*/' . $name);
         self::assertCount(1, $packages);
         $file = $packages[0];
@@ -879,8 +854,8 @@ PHPHOOK);
         self::assertTrue($zip->open($file));
         $meta = json_decode($zip->getFromName('site.json'), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame(2, $meta['blog_id']);
-        self::assertTrue($meta['uploads_included']);
-        self::assertCount(1, array_filter(array_keys($meta['files']), static fn ($name) => str_ends_with($name, '/fixture.png')));
+        self::assertSame('rsync', $meta['media_transport']);
+        self::assertCount(1, array_filter(array_keys(json_decode($zip->getFromName('media.json'), true)['files']), static fn ($name) => str_ends_with($name, '/fixture.png')));
         $zip->close();
         $hash = hash_file('sha256', $file);
         $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=' . $source], $dialogue);
@@ -1016,7 +991,7 @@ PHPHOOK);
             $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=http://source.test/source/'], [
                 ['Source website ID', ''], ['Export this website', 'yes'],
                 ['Private migration directory', ''],
-                ['New ZIP filename', $file], ['Additional site-owned tables', ''], ['Include uploads', ''],
+                ['New ZIP filename', $file], ['Additional site-owned tables', ''],
                 ['Upload subdirectories to exclude', ''],
                 ['Type that complete URL', $answer],
             ]);
@@ -1078,12 +1053,12 @@ PHPHOOK);
             self::assertStringContainsString('[1] fixture.zip', $result['stdout']);
             self::assertStringContainsString('Selected ZIP: ' . $root . '/fixture.zip', $result['stdout']);
             $state = $this->runStatus($this->runId($result), $root);
-            self::assertSame('completed', $state['observed_status']);
+            self::assertSame('media_pending', $state['observed_status']);
             self::assertTrue($state['package_intact']);
             $content = self::$sandbox->fixture('target', 'content', [(string) $state['site_id']]);
             $source = self::$sandbox->fixture('source', 'content', ['2']);
             self::assertSame($source['title'], $content['title']);
-            self::assertSame($source['media_hash'], $content['media_hash']);
+            self::assertNull($content['media_hash']);
             self::assertSame(4, $content['shared']);
             self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
             $this->assertWorkspaceClean();
@@ -1158,31 +1133,6 @@ PHPHOOK);
         $this->assertWorkspaceClean();
     }
 
-    public function testWizardRequiresSeparateConsentWhenMediaAreMissing(): void
-    {
-        self::$sandbox->exportPackage();
-        $package = $this->modifiedPackage(static function ($zip) {
-            $meta = json_decode($zip->getFromName('site.json'), true, 512, JSON_THROW_ON_ERROR);
-            $meta['uploads_included'] = false;
-            foreach (array_keys($meta['files']) as $name) {
-                if (str_starts_with($name, 'wp-content/uploads/')) {
-                    $zip->deleteName($name);
-                }
-            }
-            $zip->addFromString('site.json', json_encode($meta, JSON_THROW_ON_ERROR));
-        });
-        $before = self::$sandbox->fixture('target', 'state');
-        $dialogue = $this->wizardImportDialogue($package, 'http://target.test/wizard-no-media/');
-        $dialogue[] = ['Media are absent; a separate transfer is not verified. Continue', ''];
-        $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
-        self::assertNotSame(0, $result['code']);
-        self::assertSame(6, $result['answers']);
-        self::assertStringNotContainsString('Type that complete URL', $result['stdout']);
-        self::assertSame($before, self::$sandbox->fixture('target', 'state'));
-        self::assertNull($this->runStatus($this->runId($result))['site_id']);
-        $this->assertWorkspaceClean();
-    }
-
     public function testLargeSqlValueSurvivesPreflightAndImportWithoutChangingOtherSites(): void
     {
         $source = self::$sandbox->fixture('source', 'snapshot', ['2']);
@@ -1209,7 +1159,7 @@ PHPHOOK);
         self::assertSame($files, $this->uploadsSnapshot());
         $result = self::$sandbox->command('target', $args);
         self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
-        self::assertSame('completed', $this->runStatus($this->runId($result))['observed_status']);
+        self::assertSame('media_pending', $this->runStatus($this->runId($result))['observed_status']);
         $hash = trim(self::$sandbox->wp('target', ['eval', "echo hash('sha256', serialize(get_option('rrze_large_sql_fixture')));", '--url=' . $url]));
         self::assertSame(hash('sha256', $serialized), $hash);
         self::assertSame($source, self::$sandbox->fixture('source', 'snapshot', ['2']));
@@ -1229,259 +1179,13 @@ PHPHOOK);
         }
     }
 
-    public function testWizardUploadLimitationRequiresConsentForPreviewAndImport(): void
-    {
-        self::$sandbox->exportPackage();
-        $hook = $this->customUploadHook();
-        try {
-            $before = self::$sandbox->fixture('target', 'state');
-            $files = $this->uploadsSnapshot();
-            foreach (['preview', 'import'] as $action) {
-                foreach (['', '!quit', "\x04"] as $answer) {
-                    $dialogue = $this->wizardImportDialogue('fixture.zip', 'http://target.test/manual-cancel/');
-                    $dialogue[4][1] = $action;
-                    $dialogue[] = ['Continue without uploads', $answer];
-                    $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
-                    self::assertNotSame(0, $result['code']);
-                    self::assertStringContainsString('Upload limitation:', $result['stdout']);
-                    self::assertStringContainsString('Media and custom upload locations are not verified', $result['stdout']);
-                    self::assertStringNotContainsString('Type that complete URL', $result['stdout']);
-                    self::assertSame($before, self::$sandbox->fixture('target', 'state'));
-                    self::assertSame($files, $this->uploadsSnapshot());
-                    if ($action === 'import') {
-                        self::assertNull($this->runStatus($this->runId($result))['site_id']);
-                    }
-                    $this->assertWorkspaceClean();
-                }
-            }
-            $runs = glob(self::$sandbox->root . '/runs-target/*');
-            $dialogue = $this->wizardImportDialogue('fixture.zip', 'http://target.test/manual-preview/');
-            $dialogue[4][1] = '';
-            $dialogue[] = ['Continue without uploads', 'yes'];
-            $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
-            self::assertSame(0, $result['code'], $result['stdout']);
-            self::assertStringContainsString('Media transfer: SKIPPED', $result['stdout']);
-            self::assertStringContainsString('Dry-run complete', $result['stdout']);
-            self::assertSame($before, self::$sandbox->fixture('target', 'state'));
-            self::assertSame($files, $this->uploadsSnapshot());
-            self::assertSame($runs, glob(self::$sandbox->root . '/runs-target/*'));
-            $this->assertWorkspaceClean();
-        } finally {
-            unlink($hook);
-        }
-    }
-
-    public function testWizardManualUploadImportLeavesMediaForExternalTransfer(): void
-    {
-        self::$sandbox->exportPackage();
-        $source = self::$sandbox->fixture('source', 'snapshot', ['2']);
-        $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
-        $files = $this->uploadsSnapshot();
-        $manual = self::$sandbox->root . '/manual-media';
-        mkdir($manual, 0700);
-        file_put_contents($manual . '/protected.txt', 'existing custom media');
-        $hook = $this->customUploadHook();
-        try {
-            $url = 'http://target.test/manual-upload-import/';
-            $dialogue = $this->wizardImportDialogue('fixture.zip', $url);
-            $dialogue[] = ['Continue without uploads', 'yes'];
-            $dialogue[] = ['Type that complete URL', $url];
-            $dialogue[] = ['Create the new website and execute this plan now', 'yes'];
-            $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
-            self::assertSame(0, $result['code'], $result['stdout']);
-            self::assertStringContainsString('Site data imported', $result['stdout']);
-            self::assertStringContainsString('Uploads were skipped', $result['stdout']);
-            self::assertStringNotContainsString('Transferring packaged media', $result['stdout']);
-            self::assertStringNotContainsString('All done', $result['stdout']);
-            $state = $this->runStatus($this->runId($result));
-            self::assertSame('completed', $state['observed_status']);
-            self::assertSame('skipped', $state['steps']['import_uploads']['status']);
-            self::assertSame('manual_transfer', $state['steps']['import_uploads']['reason']);
-            self::assertTrue($state['uploads']['included']);
-            self::assertTrue($state['uploads']['skipped']);
-            self::assertTrue($state['uploads']['manual_transfer_required']);
-            self::assertFalse($state['uploads']['transfer']);
-            self::assertFalse($state['uploads']['verified']);
-            self::assertSame(0, $state['uploaded_files']);
-            self::assertNull($state['uploads_directory']);
-            self::assertStringContainsString('Media and custom upload locations are not verified', $state['media_notice']);
-            $status = self::$sandbox->command('target', ['rrze-migration', 'status', $state['run_id']]);
-            self::assertStringContainsString('Uploads are skipped', $status['stdout'] . $status['stderr']);
-            $content = self::$sandbox->fixture('target', 'content', [(string) $state['site_id']]);
-            self::assertSame('Migration fixture', $content['title']);
-            self::assertSame($url . 'about/', $content['option']['url']);
-            self::assertNull($content['media_hash']);
-            $guid = self::$sandbox->wp('target', ['post', 'get', (string) $content['attachment'], '--field=guid', '--url=' . $url]);
-            self::assertStringContainsString('wp-content/uploads/sites/2/', $guid);
-            self::assertSame($files, $this->uploadsSnapshot());
-            self::assertSame([$manual . '/protected.txt'], glob($manual . '/*'));
-            self::assertSame('existing custom media', file_get_contents($manual . '/protected.txt'));
-            self::assertSame($source, self::$sandbox->fixture('source', 'snapshot', ['2']));
-            self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
-            $this->assertWorkspaceClean();
-        } finally {
-            unlink($hook);
-        }
-    }
-
-    public function testExplicitSkipUploadsWorksWithCustomAndLegacyLayouts(): void
-    {
-        self::$sandbox->exportPackage();
-        $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/upload-layout.php';
-        foreach ([
-            "add_filter('pre_option_upload_path', static fn () => 'custom/uploads');",
-            "add_filter('pre_site_option_ms_files_rewriting', '__return_true');",
-            "define('UPLOADS', 'custom/uploads');",
-            "define('BLOGUPLOADDIR', ABSPATH . 'custom/uploads/');",
-        ] as $configuration) {
-            file_put_contents($hook, '<?php ' . $configuration);
-            try {
-                $before = self::$sandbox->fixture('target', 'state');
-                $files = $this->uploadsSnapshot();
-                $args = ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/manual-layout/', '--dry-run', '--format=json'];
-                $result = self::$sandbox->command('target', $args);
-                self::assertNotSame(0, $result['code']);
-                self::assertStringContainsString('separately supported migration adapter', $result['stderr']);
-                $result = self::$sandbox->command('target', [...$args, '--no-skip-uploads']);
-                self::assertNotSame(0, $result['code']);
-                self::assertStringContainsString('separately supported migration adapter', $result['stderr']);
-                $plan = json_decode(self::$sandbox->wp('target', [...$args, '--skip-uploads']), true, 512, JSON_THROW_ON_ERROR);
-                self::assertTrue($plan['uploads']['skipped']);
-                self::assertFalse($plan['uploads']['transfer']);
-                self::assertFalse($plan['uploads']['verified']);
-                self::assertNull($plan['destination_details']['uploads_directory']);
-                self::assertNull($plan['destination_details']['storage']);
-                self::assertSame($before, self::$sandbox->fixture('target', 'state'));
-                self::assertSame($files, $this->uploadsSnapshot());
-                $this->assertWorkspaceClean();
-            } finally {
-                unlink($hook);
-            }
-        }
-    }
-
-    public function testSkipUploadsCannotBypassExistingSitesLeftoversOrPackageIntegrity(): void
-    {
-        self::$sandbox->exportPackage();
-        $args = ['rrze-migration', 'import', 'all', 'fixture.zip', '--skip-uploads'];
-        $before = self::$sandbox->fixture('target', 'state');
-        $result = self::$sandbox->command('target', [...$args, '--new_url=http://target.test/control/']);
-        self::assertNotSame(0, $result['code']);
-        self::assertStringContainsString('already exists', $result['stderr']);
-        self::assertSame($before, self::$sandbox->fixture('target', 'state'));
-        foreach (['table', 'files', 'membership'] as $kind) {
-            self::$sandbox->fixture('target', 'leftover', [$kind, 'create']);
-            try {
-                $before = self::$sandbox->fixture('target', 'state');
-                $files = $this->uploadsSnapshot();
-                $result = self::$sandbox->command('target', [...$args, '--new_url=http://target.test/manual-conflict/']);
-                self::assertNotSame(0, $result['code']);
-                self::assertStringContainsString('Pre-existing', $result['stderr']);
-                self::assertSame($before, self::$sandbox->fixture('target', 'state'));
-                self::assertSame($files, $this->uploadsSnapshot());
-            } finally {
-                self::$sandbox->fixture('target', 'leftover', [$kind, 'remove']);
-            }
-        }
-        $package = $this->modifiedPackage(static function (ZipArchive $zip): void {
-            for ($index = 0; $index < $zip->numFiles; $index++) {
-                $name = $zip->getNameIndex($index);
-                if (str_ends_with($name, '/fixture.png')) {
-                    $zip->addFromString($name, 'corrupt media');
-                }
-            }
-        }, false);
-        $before = self::$sandbox->fixture('target', 'state');
-        $hook = $this->customUploadHook();
-        try {
-            $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $package, '--skip-uploads', '--new_url=http://target.test/manual-corrupt/']);
-            self::assertNotSame(0, $result['code']);
-            $dialogue = $this->wizardImportDialogue($package, 'http://target.test/manual-corrupt/');
-            $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
-            self::assertNotSame(0, $result['code']);
-            self::assertStringNotContainsString('Continue without uploads', $result['stdout']);
-            self::assertSame($before, self::$sandbox->fixture('target', 'state'));
-            $this->assertWorkspaceClean();
-        } finally {
-            unlink($hook);
-        }
-    }
-
-    public function testExplicitSkipUploadsImportsSiteDataOnStandardLayout(): void
-    {
-        self::$sandbox->exportPackage();
-        $files = $this->uploadsSnapshot();
-        $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/manual-standard/', '--uid_fields=_fixture_user', '--skip-uploads']);
-        self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
-        self::assertStringContainsString('Uploads were skipped', $result['stdout']);
-        $state = $this->runStatus($this->runId($result));
-        self::assertSame('completed', $state['observed_status']);
-        self::assertSame('skipped', $state['steps']['import_uploads']['status']);
-        self::assertFalse($state['uploads']['verified']);
-        self::assertSame(0, $state['uploaded_files']);
-        self::assertSame($files, $this->uploadsSnapshot());
-        self::assertDirectoryDoesNotExist(self::$sandbox->root . '/target/wp-content/uploads/sites/' . $state['site_id']);
-        $this->assertWorkspaceClean();
-    }
-
-    public function testUploadChangesDuringReviewCannotInheritApproval(): void
-    {
-        self::$sandbox->exportPackage();
-        foreach (['limitation', 'leftover'] as $kind) {
-            $hook = $kind === 'leftover' ? $this->customUploadHook() : self::$sandbox->root . '/target/wp-content/mu-plugins/late-upload-layout.php';
-            if ($kind === 'limitation') {
-                file_put_contents($hook, <<<'PHPHOOK'
-<?php
-add_action('rrze_migration_before_step', static function ($step) {
-    if ($step === 'recheck') {
-        add_filter('upload_dir', '__return_empty_array');
-    }
-});
-PHPHOOK);
-            }
-            $after = null;
-            $files = null;
-            try {
-                $url = 'http://target.test/manual-late-' . $kind . '/';
-                $dialogue = $this->wizardImportDialogue('fixture.zip', $url);
-                if ($kind === 'leftover') {
-                    $dialogue[] = ['Continue without uploads', 'yes'];
-                }
-                $dialogue[] = ['Type that complete URL', $url];
-                $dialogue[] = ['Create the new website and execute this plan now', function () use ($kind, &$after, &$files) {
-                    if ($kind === 'leftover') {
-                        self::$sandbox->fixture('target', 'leftover', ['files', 'create']);
-                    }
-                    $after = self::$sandbox->fixture('target', 'state');
-                    $files = $this->uploadsSnapshot();
-                    return 'yes';
-                }];
-                $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
-                self::assertNotSame(0, $result['code']);
-                self::assertStringContainsString($kind === 'limitation' ? 'migration adapter' : 'Pre-existing uploads', $result['stdout']);
-                self::assertSame($kind === 'limitation' ? 0 : 1, substr_count($result['stdout'], 'Continue without uploads'));
-                self::assertNull($this->runStatus($this->runId($result))['site_id']);
-                self::assertSame($after, self::$sandbox->fixture('target', 'state'));
-                self::assertSame($files, $this->uploadsSnapshot());
-                $this->assertWorkspaceClean();
-            } finally {
-                if ($kind === 'leftover' && $after !== null) {
-                    self::$sandbox->fixture('target', 'leftover', ['files', 'remove']);
-                }
-                if ($hook !== null) {
-                    unlink($hook);
-                }
-            }
-        }
-    }
-
     public function testExportAndImportSharePrivateStorageWithIndependentSubdirectories(): void
     {
         self::$sandbox->exportPackage();
         $source = self::$sandbox->fixture('source', 'snapshot', ['2']);
         $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
         $root = self::$sandbox->root . '/shared-migrations';
-        self::$sandbox->wp('source', ['rrze-migration', 'export', 'all', 'shared package', '--run-dir=' . $root, '--uploads', '--url=http://source.test/source/']);
+        self::$sandbox->wp('source', ['rrze-migration', 'export', 'all', 'shared package', '--run-dir=' . $root, '--url=http://source.test/source/']);
         $packages = glob($root . '/export-*/shared package.zip');
         self::assertCount(1, $packages);
         $package = $packages[0];
@@ -1502,7 +1206,7 @@ PHPHOOK);
         self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
         $id = $this->runId($result);
         $state = json_decode(self::$sandbox->wp('target', ['rrze-migration', 'status', $id, '--run-dir=' . $root, '--format=json']), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame('completed', $state['observed_status']);
+        self::assertSame('media_pending', $state['observed_status']);
         self::assertSame($root . '/' . $id . '/package.zip', $state['preserved_package']);
         self::assertSame($hash, hash_file('sha256', $state['preserved_package']));
         self::assertSame($hash, hash_file('sha256', $package));
@@ -1567,15 +1271,15 @@ PHPHOOK);
         $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
         $source = self::$sandbox->fixture('source', 'state');
         try {
-            foreach ([false, true] as $skipUploads) {
+            foreach ([1, 2] as $attempt) {
                 $users = self::$sandbox->fixture('target', 'users');
-                $url = 'http://target.test/role-collision-' . ($skipUploads ? 'manual' : 'automatic') . '/';
-                $options = $skipUploads ? ['--skip-uploads'] : [];
+                $url = 'http://target.test/role-collision-' . $attempt . '/';
+                $options = [];
                 $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $package, '--new_url=' . $url, '--uid_fields=_fixture_user', ...$options]);
                 self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
                 $state = $this->runStatus($this->runId($result));
                 $id = $state['site_id'];
-                self::assertSame('completed', $state['observed_status']);
+                self::assertSame('media_pending', $state['observed_status']);
                 self::assertSame('completed', $state['steps']['configure_site']['status']);
                 self::assertSame('1', trim(self::$sandbox->wp('target', ['option', 'get', 'rrze_fixture_role_collision', '--url=' . $url])));
                 $imported = json_decode(self::$sandbox->wp('target', ['option', 'get', 'dst_' . $id . '_user_roles', '--format=json', '--url=' . $url]), true, 512, JSON_THROW_ON_ERROR);
@@ -1614,7 +1318,7 @@ PHPHOOK);
                     }
                     $zip->addFromString('tables.sql', $sql);
                 });
-                $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $package, '--new_url=http://target.test/roles-' . $case . '/', '--skip-uploads']);
+                $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $package, '--new_url=http://target.test/roles-' . $case . '/']);
                 self::assertNotSame(0, $result['code']);
                 self::assertStringContainsString($case === 'missing' ? 'source role option is missing' : 'nonempty serialized role array', $result['stderr']);
                 $state = $this->runStatus($this->runId($result));
@@ -1638,7 +1342,7 @@ PHPHOOK);
     {
         self::$sandbox->exportPackage();
         $url = 'http://target.test/matching-role-key/';
-        $plan = json_decode(self::$sandbox->wp('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=' . $url, '--skip-uploads', '--dry-run', '--format=json']), true, 512, JSON_THROW_ON_ERROR);
+        $plan = json_decode(self::$sandbox->wp('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=' . $url, '--dry-run', '--format=json']), true, 512, JSON_THROW_ON_ERROR);
         $id = $plan['destination_details']['estimated_site_id'];
         $prefix = 'dst_' . $id . '_';
         $roles = json_decode(self::$sandbox->wp('source', ['option', 'get', 'src_2_user_roles', '--format=json', '--url=http://source.test/source/']), true, 512, JSON_THROW_ON_ERROR);
@@ -1653,10 +1357,10 @@ PHPHOOK);
             $zip->addFromString('tables.sql', $sql);
             $zip->addFromString('site.json', json_encode($meta, JSON_THROW_ON_ERROR));
         });
-        $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $package, '--new_url=' . $url, '--skip-uploads']);
+        $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $package, '--new_url=' . $url]);
         self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
         $state = $this->runStatus($this->runId($result));
-        self::assertSame('completed', $state['observed_status']);
+        self::assertSame('media_pending', $state['observed_status']);
         self::assertSame($id, $state['site_id']);
         self::assertSame($roles, json_decode(self::$sandbox->wp('target', ['option', 'get', $prefix . 'user_roles', '--format=json', '--url=' . $url]), true, 512, JSON_THROW_ON_ERROR));
         $this->assertWorkspaceClean();
@@ -1670,12 +1374,13 @@ PHPHOOK);
 add_action('init', static function () {
     global $wpdb;
     if (get_current_blog_id() > 2 && !get_option($wpdb->prefix . 'user_roles')) {
-        // A plugin booting during search-replace can recreate the new site's role option.
+        // A plugin can recreate the new site's role option before configuration.
         add_role('editor', 'Temporary plugin editor', ['read' => true, 'manage_options' => true]);
         update_option('rrze_fixture_role_collision', true);
     }
 });
 PHPHOOK);
+        file_put_contents($hook, PHP_EOL . 'add_action("rrze_migration_before_step", static function ($step, $run) { if ($step !== "configure_site") { return; } $state = json_decode(file_get_contents(RRZE_MIGRATION_RUN_DIR . "/" . $run . "/run.json"), true); switch_to_blog($state["site_id"]); do_action("init"); restore_current_blog(); }, 10, 2);', FILE_APPEND);
         return $hook;
     }
 
@@ -1708,7 +1413,7 @@ PHPHOOK);
         $result = self::$sandbox->command('target', $args);
         self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
         $status = $this->runStatus($this->runId($result));
-        self::assertSame('completed', $status['status']);
+        self::assertSame('media_pending', $status['status']);
         $site = $status['site_id'];
         $new = self::$sandbox->fixture('target', 'lookup-user', ['reference01'])['id'];
         $existing = $users['sso0001']['target_id'];
@@ -1793,25 +1498,21 @@ PHPHOOK);
         $source = self::$sandbox->fixture('source', 'snapshot', ['2']);
         $sourceUrl = trim(self::$sandbox->wp('source', ['option', 'get', 'home', '--url=http://source.test/source/']));
         $exports = glob(self::$sandbox->root . '/runs-source/export-*');
-        $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', 'blocked.zip', '--uploads', '--url=http://source.test/source/']);
+        $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', 'blocked.zip', '--url=http://source.test/source/']);
         self::assertNotSame(0, $result['code']);
-        self::assertStringContainsString('wp-content/uploads/wp-migrate-db/.htaccess', $result['stderr']);
+        self::assertStringContainsString('wp-content/uploads/wp-migrate-db/', $result['stderr']);
         self::assertFileDoesNotExist(self::$sandbox->root . '/source/blocked.zip');
         self::assertSame($exports, glob(self::$sandbox->root . '/runs-source/export-*'));
         $this->assertWorkspaceClean();
-        $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', 'invalid-exclusion.zip', '--exclude-upload-dirs=wp-migrate-db', '--url=http://source.test/source/']);
-        self::assertNotSame(0, $result['code']);
-        self::assertStringContainsString('requires --uploads', $result['stderr']);
-        self::assertFileDoesNotExist(self::$sandbox->root . '/source/invalid-exclusion.zip');
-        self::$sandbox->wp('source', ['rrze-migration', 'export', 'all', 'direct-excluded.zip', '--uploads', '--exclude-upload-dirs=wp-migrate-db', '--url=http://source.test/source/']);
+        self::$sandbox->wp('source', ['rrze-migration', 'export', 'all', 'direct-excluded.zip', '--exclude-upload-dirs=wp-migrate-db', '--url=http://source.test/source/']);
         $result = self::$sandbox->terminal('source', ['rrze-migration', 'wizard', 'export', '--url=http://source.test/source/'], [
             ['Source website ID', ''], ['Export this website', 'yes'],
             ['Private migration directory', ''],
-            ['New ZIP filename', 'excluded.zip'], ['Additional site-owned tables', ''], ['Include uploads', 'yes'],
+            ['New ZIP filename', 'excluded.zip'], ['Additional site-owned tables', ''],
             ['Upload subdirectories to exclude', 'wp-migrate-db'], ['Type that complete URL', $sourceUrl], ['Create this export package now', 'yes'],
         ]);
         self::assertSame(0, $result['code'], $result['stdout']);
-        self::assertSame(9, $result['answers']);
+        self::assertSame(8, $result['answers']);
         self::assertStringContainsString('Excluded upload directories: wp-migrate-db', $result['stdout']);
         $packages = glob(self::$sandbox->root . '/runs-source/export-*/excluded.zip');
         self::assertCount(1, $packages);
@@ -1824,7 +1525,7 @@ PHPHOOK);
         self::assertFalse($zip->locateName('wp-content/uploads/wp-migrate-db/.htaccess'));
         self::assertFalse($zip->locateName('wp-content/uploads/wp-migrate-db/index.php'));
         self::assertFalse($zip->locateName('wp-content/uploads/wp-migrate-db/backup.sql'));
-        self::assertSame('ordinary upload', $zip->getFromName('wp-content/uploads/wp-migrate-db-keep/keep.txt'));
+        self::assertSame(hash('sha256', 'ordinary upload'), json_decode($zip->getFromName('media.json'), true)['files']['wp-migrate-db-keep/keep.txt']['sha256']);
         $zip->close();
         $targetBefore = self::$sandbox->fixture('target', 'state');
         $control = self::$sandbox->fixture('target', 'snapshot', ['2']);
@@ -1832,7 +1533,7 @@ PHPHOOK);
         $plan = json_decode(self::$sandbox->wp('target', ['rrze-migration', 'import', 'all', 'excluded.zip', '--new_url=' . $url, '--dry-run', '--format=json']), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame(['wp-migrate-db'], $plan['uploads']['excluded_directories']);
         $dialogue = $this->wizardImportDialogue('excluded.zip', $url);
-        $dialogue[] = ['Listed upload directories were excluded and will not be restored. Continue', ''];
+        $dialogue[] = ['Listed upload directories were excluded from transfer and verification. Continue', ''];
         $result = self::$sandbox->terminal('target', ['rrze-migration', 'wizard', 'import'], $dialogue);
         self::assertNotSame(0, $result['code']);
         self::assertSame(6, $result['answers']);
@@ -1844,33 +1545,15 @@ PHPHOOK);
         self::assertSame(0, $result['code'], $result['stdout']);
         self::assertSame(8, $result['answers']);
         $state = $this->runStatus($this->runId($result));
-        self::assertSame('completed', $state['observed_status']);
+        self::assertSame('media_pending', $state['observed_status']);
         $content = self::$sandbox->fixture('target', 'content', [(string) $state['site_id']]);
         $original = self::$sandbox->fixture('source', 'content', ['2']);
-        self::assertSame($original['media_hash'], $content['media_hash']);
-        self::assertSame('ordinary upload', file_get_contents($state['uploads_directory'] . '/wp-migrate-db-keep/keep.txt'));
+        self::assertNull($content['media_hash']);
+        self::assertFileDoesNotExist($state['uploads_directory'] . '/wp-migrate-db-keep/keep.txt');
         self::assertDirectoryDoesNotExist($state['uploads_directory'] . '/wp-migrate-db');
         self::assertSame($source, self::$sandbox->fixture('source', 'snapshot', ['2']));
         self::assertSame($control, self::$sandbox->fixture('target', 'snapshot', ['2']));
         $this->assertWorkspaceClean();
-    }
-
-    private function customUploadHook(): string
-    {
-        $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/custom-uploads.php';
-        file_put_contents($hook, <<<'PHPHOOK'
-<?php
-add_filter('upload_dir', static function ($uploads) {
-    if (get_current_blog_id() > 2) {
-        $uploads['basedir'] = dirname(rtrim(ABSPATH, '/')) . '/manual-media';
-        $uploads['baseurl'] = 'http://media.test/custom';
-        $uploads['path'] = $uploads['basedir'] . $uploads['subdir'];
-        $uploads['url'] = $uploads['baseurl'] . $uploads['subdir'];
-    }
-    return $uploads;
-});
-PHPHOOK);
-        return $hook;
     }
 
     private function wizardImportDialogue(string $file, string $url): array
@@ -2007,7 +1690,7 @@ PHPHOOK);
             self::assertSame(8, $result['answers']);
             $id = $this->runId($result);
             $status = $this->runStatus($id);
-            self::assertSame('completed', $status['observed_status']);
+            self::assertSame('media_pending', $status['observed_status']);
             self::assertStringContainsString('✓', $result['stdout']);
             self::assertStringContainsString('Private diagnostic report:', $result['stdout']);
             $reports = glob(self::$sandbox->root . '/runs-target/' . $id . '/diagnostics-*.json');
@@ -2021,6 +1704,218 @@ PHPHOOK);
             unlink($hook);
         }
         $this->assertWorkspaceClean();
+    }
+
+    public function testExternalMediaTransferUsesActualSiteAndCanBeVerifiedWithoutReimporting(): void
+    {
+        self::$sandbox->exportPackage();
+        $before = self::$sandbox->fixture('target', 'snapshot', ['2']);
+        $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/external-transfer/']);
+        self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
+        $id = $this->runId($result);
+        $state = $this->runStatus($id);
+        self::assertSame('media_pending', $state['status']);
+        self::assertFalse($state['uploads']['verified']);
+        self::assertSame([], glob($state['uploads_directory'] . '/*'));
+        self::assertStringContainsString('/sites/' . $state['site_id'], $state['media_destination']['baseurl']);
+        self::assertStringContainsString('media verify ' . $id, $result['stdout']);
+        self::assertStringNotContainsString('--delete', $result['stdout']);
+        $database = self::$sandbox->fixture('target', 'state');
+        $missing = self::$sandbox->command('target', ['rrze-migration', 'media', 'verify', $id]);
+        self::assertNotSame(0, $missing['code']);
+        self::assertStringContainsString('Media verification failed', $missing['stderr']);
+        self::assertSame('media_pending', $this->runStatus($id)['status']);
+        $this->transferMedia($id);
+        $verified = self::$sandbox->command('target', ['rrze-migration', 'media', 'verify', $id]);
+        self::assertSame(0, $verified['code'], $verified['stdout'] . $verified['stderr']);
+        $state = $this->runStatus($id);
+        self::assertSame('completed', $state['status']);
+        self::assertTrue($state['uploads']['verified']);
+        self::assertSame(1, $state['media_verification']['attachments']);
+        self::assertFalse($state['media_verification']['access_checked_by_operator']);
+        self::assertSame($database, self::$sandbox->fixture('target', 'state'));
+        $content = self::$sandbox->fixture('target', 'content', [(string) $state['site_id']]);
+        self::assertSame(self::$sandbox->fixture('source', 'content', ['2'])['media_hash'], $content['media_hash']);
+        // Repeat verification, then demonstrate that a failed later check revokes stale success.
+        self::$sandbox->wp('target', ['rrze-migration', 'media', 'verify', $id]);
+        $manifest = json_decode(file_get_contents(self::$sandbox->root . '/runs-target/' . $id . '/media.json'), true);
+        $file = $state['uploads_directory'] . '/' . array_key_first($manifest['files']);
+        file_put_contents($file, 'damaged');
+        $damaged = self::$sandbox->command('target', ['rrze-migration', 'media', 'verify', $id]);
+        self::assertNotSame(0, $damaged['code']);
+        self::assertSame('media_pending', $this->runStatus($id)['status']);
+        // A repeat rsync must not silently replace the existing damaged file.
+        $this->transferMedia($id, false);
+        self::assertSame('damaged', file_get_contents($file));
+        unlink($file); // Operator repair, restricted to this test's newly imported site.
+        $this->transferMedia($id);
+        self::$sandbox->wp('target', ['rrze-migration', 'media', 'verify', $id]);
+        self::assertSame($before, self::$sandbox->fixture('target', 'snapshot', ['2']));
+    }
+
+    public function testExternalMediaChecksRejectTamperedPlansWrongInstallationAndLostOwnership(): void
+    {
+        self::$sandbox->exportPackage();
+        $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/external-guards/']);
+        self::assertSame(0, $result['code'], $result['stderr']);
+        $id = $this->runId($result);
+        $directory = self::$sandbox->root . '/runs-target/' . $id;
+        $journal = file_get_contents($directory . '/run.json');
+        $wrong = self::$sandbox->command('source', ['rrze-migration', 'media', 'verify', $id, '--run-dir=' . self::$sandbox->root . '/runs-target']);
+        self::assertNotSame(0, $wrong['code']);
+        self::assertStringContainsString('different WordPress installation', $wrong['stderr']);
+        self::assertSame($journal, file_get_contents($directory . '/run.json'));
+        $list = file_get_contents($directory . '/media-files.txt');
+        file_put_contents($directory . '/media-files.txt', "../outside\0");
+        $tampered = self::$sandbox->command('target', ['rrze-migration', 'media', 'plan', $id]);
+        self::assertNotSame(0, $tampered['code']);
+        self::assertStringContainsString('does not match', $tampered['stderr']);
+        file_put_contents($directory . '/media-files.txt', $list);
+        $state = $this->runStatus($id);
+        self::$sandbox->wp('target', ['site', 'meta', 'update', (string) $state['site_id'], 'rrze_migration_run', 'different-owner']);
+        $lost = self::$sandbox->command('target', ['rrze-migration', 'media', 'verify', $id]);
+        self::assertNotSame(0, $lost['code']);
+        self::assertStringContainsString('no longer belongs', $lost['stderr']);
+    }
+
+    public function testSubdirectoryOnlyUploadFiltersAreSupportedAndChangedRootsAreRejected(): void
+    {
+        self::$sandbox->exportPackage();
+        $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/media-filter.php';
+        file_put_contents($hook, "<?php add_filter('upload_dir', static function (\$u) { \$u['subdir'] = '/_protected'; \$u['path'] = \$u['basedir'] . \$u['subdir']; \$u['url'] = \$u['baseurl'] . \$u['subdir']; return \$u; });");
+        try {
+            $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/filter-supported/']);
+            self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
+            $id = $this->runId($result);
+            $this->transferMedia($id);
+            self::$sandbox->wp('target', ['rrze-migration', 'media', 'verify', $id]);
+            file_put_contents($hook, "<?php add_filter('upload_dir', static function (\$u) { \$u['basedir'] = '/shared/other-site'; return \$u; });");
+            $changed = self::$sandbox->command('target', ['rrze-migration', 'media', 'verify', $id]);
+            self::assertNotSame(0, $changed['code']);
+            self::assertSame('media_pending', $this->runStatus($id)['status']);
+            $before = self::$sandbox->fixture('target', 'state');
+            $rejected = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/shared-root/', '--dry-run']);
+            self::assertNotSame(0, $rejected['code']);
+            self::assertStringContainsString('adapter', $rejected['stderr']);
+            self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        } finally {
+            unlink($hook);
+        }
+    }
+
+    public function testRemovedMediaOptionsAndOldPackagesAreRejectedBeforeSiteCreation(): void
+    {
+        self::$sandbox->exportPackage();
+        $before = self::$sandbox->fixture('target', 'state');
+        foreach (['--skip-uploads', '--no-skip-uploads', '--uploads'] as $flag) {
+            $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', 'fixture.zip', '--new_url=http://target.test/removed-option/', $flag]);
+            self::assertNotSame(0, $result['code']);
+            self::assertSame($before, self::$sandbox->fixture('target', 'state'));
+        }
+        $result = self::$sandbox->command('source', ['rrze-migration', 'export', 'all', 'old-upload-option.zip', '--site-id=2', '--uploads']);
+        self::assertNotSame(0, $result['code']);
+        $old = $this->modifiedPackage(static function (ZipArchive $zip): void {
+            $meta = json_decode($zip->getFromName('site.json'), true);
+            $meta['format_version'] = 1;
+            $zip->addFromString('site.json', json_encode($meta));
+        });
+        $this->assertRejected($old, 'http://target.test/old-media-package/', 'Create a new export');
+    }
+
+    public function testProtectedMediaNeedConfiguredAccessAndAnExplicitHttpAttestation(): void
+    {
+        $source = self::$sandbox->root . '/source/wp-content/uploads/sites/2/_protected';
+        mkdir($source, 0700);
+        file_put_contents($source . '/private.txt', 'protected fixture');
+        $package = $this->modifiedPackage(static function (ZipArchive $zip): void {
+            $media = json_decode($zip->getFromName('media.json'), true);
+            $media['files']['_protected/private.txt'] = ['bytes' => strlen('protected fixture'), 'sha256' => hash('sha256', 'protected fixture')];
+            $zip->addFromString('media.json', json_encode($media));
+        });
+        $hook = self::$sandbox->root . '/target/wp-content/mu-plugins/access-fixture.php';
+        try {
+            $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $package, '--new_url=http://target.test/protected-media/']);
+            self::assertSame(0, $result['code'], $result['stderr']);
+            self::assertStringContainsString('Before transferring protected media', $result['stderr']);
+            $id = $this->runId($result);
+            $this->transferMedia($id);
+            $absent = self::$sandbox->command('target', ['rrze-migration', 'media', 'verify', $id, '--access-checked']);
+            self::assertNotSame(0, $absent['code'], 'Operator attestation cannot bypass missing rrze-ac configuration.');
+            file_put_contents($hook, <<<'PHPHOOK'
+<?php
+namespace RRZE\AccessControl\Media { class Files { public static function protectedUploadDir() { return '_protected'; } } }
+namespace RRZE\AccessControl { class Options { public static function getEnabledOptionName() { return 'rrze_fixture_access'; } } }
+namespace { add_filter('pre_site_option_rrze_fixture_access', static fn () => true); }
+PHPHOOK);
+            $unconfirmed = self::$sandbox->command('target', ['rrze-migration', 'media', 'verify', $id]);
+            self::assertNotSame(0, $unconfirmed['code']);
+            self::assertStringContainsString('--access-checked', $unconfirmed['stderr']);
+            self::assertSame('media_pending', $this->runStatus($id)['status']);
+            self::$sandbox->wp('target', ['rrze-migration', 'media', 'verify', $id, '--access-checked']);
+            $state = $this->runStatus($id);
+            self::assertSame('completed', $state['status']);
+            self::assertTrue($state['media_verification']['access_checked_by_operator']);
+        } finally {
+            if (is_file($hook)) { unlink($hook); }
+            unlink($source . '/private.txt');
+            rmdir($source);
+        }
+    }
+
+    public function testMainSiteManifestExcludesOtherSitesAndEmptyMediaCanBeVerified(): void
+    {
+        self::$sandbox->wp('source', ['rrze-migration', 'export', 'all', 'main-empty-media.zip', '--site-id=1']);
+        $files = glob(self::$sandbox->root . '/runs-source/export-*/main-empty-media.zip');
+        self::assertCount(1, $files);
+        $zip = new ZipArchive();
+        self::assertTrue($zip->open($files[0]));
+        $media = json_decode($zip->getFromName('media.json'), true);
+        self::assertSame(['sites'], $media['excluded_directories']);
+        self::assertSame([], $media['files']);
+        self::assertSame(4, $zip->numFiles);
+        $zip->close();
+        $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $files[0], '--new_url=http://target.test/empty-main-media/']);
+        self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
+        $id = $this->runId($result);
+        self::assertSame('media_pending', $this->runStatus($id)['status']);
+        self::$sandbox->wp('target', ['rrze-migration', 'media', 'verify', $id]);
+        self::assertSame(0, $this->runStatus($id)['media_verification']['files']);
+    }
+
+    public function testDestinationBelowSourceUrlIsNotRewrittenTwice(): void
+    {
+        // Model a source on the same hostname as the destination network. The target
+        // is a normal one-level subsite, avoiding unsupported nested site routing.
+        $package = $this->modifiedPackage(static function (ZipArchive $zip): void {
+            $meta = json_decode($zip->getFromName('site.json'), true);
+            $meta['url'] = 'http://target.test/';
+            $zip->addFromString('site.json', json_encode($meta));
+        });
+        $url = 'http://target.test/prefix-overlap/';
+        $result = self::$sandbox->command('target', ['rrze-migration', 'import', 'all', $package, '--new_url=' . $url]);
+        self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
+        $id = $this->runId($result);
+        self::assertSame(rtrim($url, '/'), trim(self::$sandbox->wp('target', ['option', 'get', 'home', '--url=' . $url])));
+        $this->transferMedia($id);
+        self::$sandbox->wp('target', ['rrze-migration', 'media', 'verify', $id]);
+    }
+
+    private function transferMedia(string $id, bool $preview = true): void
+    {
+        $state = $this->runStatus($id);
+        $manifest = json_decode(file_get_contents(self::$sandbox->root . '/runs-target/' . $id . '/media.json'), true);
+        $text = self::$sandbox->wp('target', ['rrze-migration', 'media', 'plan', $id, '--source-dir=' . $manifest['source_directory']]);
+        self::assertMatchesRegularExpression('/^Preview: (.+)$/m', $text);
+        preg_match('/^Preview: (.+)$/m', $text, $dry);
+        preg_match('/^Transfer: (.+)$/m', $text, $copy);
+        if ($preview) {
+            $before = $this->uploadsSnapshot();
+            $result = \RRZE\CLI\Tests\Process::run(['/bin/sh', '-c', $dry[1]], self::$sandbox->root);
+            self::assertSame(0, $result['code'], $result['stderr']);
+            self::assertSame($before, $this->uploadsSnapshot());
+        }
+        $result = \RRZE\CLI\Tests\Process::run(['/bin/sh', '-c', $copy[1]], self::$sandbox->root);
+        self::assertSame(0, $result['code'], $result['stderr']);
     }
 
     private function runId(array $result): string

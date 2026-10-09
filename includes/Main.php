@@ -44,6 +44,7 @@ class Main
         // rrze-migration (website migration)
         WP_CLI::add_command('rrze-migration export', __NAMESPACE__ . '\\Migration\\Export');
         WP_CLI::add_command('rrze-migration import', __NAMESPACE__ . '\\Migration\\Import');
+        WP_CLI::add_command('rrze-migration media', __NAMESPACE__ . '\\Migration\\Media');
         WP_CLI::add_command('rrze-migration status', __NAMESPACE__ . '\\Migration\\Status');
         WP_CLI::add_command('rrze-migration wizard', __NAMESPACE__ . '\\Migration\\Wizard');
         // Author/reference updates are internal to the import of a newly created site.

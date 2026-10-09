@@ -89,11 +89,8 @@ final class Console
         $this->line('Numeric user-reference fields: ' . (implode(', ', $plan['user_reference_fields']) ?: 'none'));
         $this->line('Media: ' . $plan['uploads']['files'] . ' files; ' . number_format($plan['uploads']['bytes'] / 1048576, 1) . ' MiB');
         $this->line('Excluded upload directories: ' . (implode(', ', $plan['uploads']['excluded_directories'] ?? []) ?: 'none'));
-        if ($plan['uploads']['manual_transfer_required']) {
-            $this->status('!', 'Manual media transfer and verification required.', '33');
-        } else {
-            $this->line('Upload destination: ' . $plan['destination_details']['uploads_directory']);
-        }
+        $this->status('!', 'External rsync transfer and media verification required.', '33');
+        $this->line('Upload destination: ' . $plan['destination_details']['uploads_directory']);
         foreach ($plan['limitations'] as $limitation) {
             $this->line('Note: ' . $limitation);
         }
@@ -112,7 +109,8 @@ final class Console
         } else {
             $this->line('Site tables: ' . count($plan['tables']) . ' (use --verbose for table names)');
         }
-        $this->line('Uploads: ' . ($plan['uploads'] ? 'included' : 'NOT included; separate transfer required'));
+        $this->line('Media: external rsync transfer; inventory and checksums only in ZIP');
+        $this->line('Media source: ' . $plan['media_source']);
         $this->line('Excluded upload directories: ' . (implode(', ', $plan['excluded_upload_directories']) ?: 'none'));
     }
 

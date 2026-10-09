@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use RRZE\CLI\Migration\{Files, Package, UploadExclusions};
+use RRZE\CLI\Migration\{Files, Package, UploadExclusions, MediaManifest};
 
 final class UploadExclusionsTest extends TestCase
 {
@@ -12,7 +12,7 @@ final class UploadExclusionsTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->root = Files::workspace();
+        $this->root = realpath(Files::workspace());
         mkdir($this->root . '/uploads/wp-migrate-db', 0700, true);
     }
 
@@ -58,27 +58,18 @@ final class UploadExclusionsTest extends TestCase
         file_put_contents($uploads . '/wp-migrate-db/index.php', '<?php // Placeholder');
         file_put_contents($uploads . '/wp-migrate-db/backup.sql', 'synthetic private backup');
         file_put_contents($uploads . '/wp-migrate-db-other/photo.png', 'normal media');
-        $paths = ['tables.sql' => $this->root . '/tables.sql', 'users.csv' => $this->root . '/users.csv', 'wp-content/uploads' => $uploads];
-        file_put_contents($paths['tables.sql'], 'controlled SQL');
-        file_put_contents($paths['users.csv'], 'synthetic users');
-        $meta = ['url' => 'https://source.test/', 'blog_id' => 2, 'db_prefix' => 'wp_2_', 'tables' => ['wp_2_posts'], 'uploads_included' => true];
-        $zip = $this->root . '/export.zip';
-        file_put_contents($zip, '');
+        $layout = ['basedir' => $uploads, 'baseurl' => 'https://source.test/uploads'];
         try {
-            Package::write($zip, $paths, $meta, $this->root);
+            MediaManifest::capture($layout, []);
             self::fail('An exclusion must never be assumed.');
         } catch (RuntimeException $error) {
             self::assertStringContainsString('server configuration', $error->getMessage());
-            self::assertStringContainsString('wp-content/uploads/wp-migrate-db/.htaccess', $error->getMessage());
+            self::assertStringContainsString('wp-content/uploads/wp-migrate-db/', $error->getMessage());
         }
-        $meta['excluded_upload_directories'] = ['wp-migrate-db'];
-        Package::write($zip, $paths, $meta, $this->root);
-        mkdir($this->root . '/extract', 0700);
-        $package = Package::read($zip, $this->root . '/extract');
-        self::assertSame(['wp-migrate-db'], $package['meta']['excluded_upload_directories']);
-        self::assertCount(4, $package['files']);
-        self::assertSame('normal media', file_get_contents($this->root . '/extract/wp-content/uploads/wp-migrate-db-other/photo.png'));
-        self::assertDirectoryDoesNotExist($this->root . '/extract/wp-content/uploads/wp-migrate-db');
+        $manifest = MediaManifest::capture($layout, ['wp-migrate-db']);
+        self::assertSame(['wp-migrate-db'], $manifest['excluded_directories']);
+        self::assertSame(['wp-migrate-db-other/photo.png'], array_keys($manifest['files']));
+        self::assertSame(hash('sha256', 'normal media'), $manifest['files']['wp-migrate-db-other/photo.png']['sha256']);
         self::assertSame('Deny from all', file_get_contents($uploads . '/wp-migrate-db/.htaccess'));
         self::assertSame('<?php // Placeholder', file_get_contents($uploads . '/wp-migrate-db/index.php'));
         self::assertSame('synthetic private backup', file_get_contents($uploads . '/wp-migrate-db/backup.sql'));

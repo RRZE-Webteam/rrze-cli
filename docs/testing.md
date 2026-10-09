@@ -1,5 +1,26 @@
 # Migrationstests
 
+Der aktuelle Medienablauf verwendet seit 9. Oktober 2026 ausschließlich externen rsync-Transfer mit separater Verifikation; siehe [Medientransfer](migration-media.md). Die datierten Abschnitte unten dokumentieren frühere Entwicklungsstände, darunter inzwischen entfernte Upload-Optionen. Sie sind keine aktuelle Bedienungsanleitung.
+
+## Aktueller Teststand: externer Medientransfer
+
+Am 9. Oktober 2026 erfolgreich: 248 Unit-Tests mit 475 Assertions unter PHP 8.5.11. PHP-Syntaxprüfung von 45 betroffenen bzw. angrenzenden Dateien, lokale Dokumentationslinks und `git diff --check` sind fehlerfrei.
+
+Die MAMP-Integration unter PHP 8.3.30 wurde als vollständiger Lauf mit 65 Tests und anschließenden gezielten Nachprüfungen ausgeführt. Im Gesamtlauf waren 64 Tests erfolgreich; ein versehentlich geänderter Erwartungswert zur Antwortanzahl eines unveränderten Importdialogs wurde korrigiert und im Nachlauf erfolgreich geprüft. Der Nachlauf deckte außerdem Rollenoptionen, echten lokalen rsync-Transfer, geschützte Medien und leere Hauptsite-Medienbestände ab. Ein zusätzlicher Test für überlappende Quell-/Ziel-URLs verwendete zunächst eine ungeeignete verschachtelte Site-Adresse; mit einer regulären Subsite-Adresse bestand er anschließend mit 10 Assertions. Damit sind alle aktuell 66 Integrationsfälle durch Gesamtlauf und gezielte Nachläufe abgedeckt; ein zweiter vollständiger Gesamtlauf wurde nicht ausgeführt. Eigene Testdatenbanken und temporäre WordPress-Kopien wurden nach den Läufen bereinigt.
+
+Die neuen Regressionen prüfen insbesondere:
+
+- Paketversion 2 mit Daten und Medienmanifest, ohne Medienbytes; Ablehnung alter Pakete und entfernter Upload-Optionen.
+- Quelle und Medienumfang anhand relativer Dateinamen, Größen und SHA-256-Prüfsummen; explizite Ausschlüsse und automatischer Ausschluss fremder Subsite-Medien beim Hauptsite-Export.
+- Eigenes Zielverzeichnis der tatsächlich angelegten Website; serialisierungssichere Medien-URL-Zuordnung, Verzeichnisgrenzen bei Site-IDs, protokollrelative/root-relative und JSON-escaped URLs sowie überlappende Website-Adressen.
+- Ausgabe und Ausführung der lokalen rsync-Vorschau ohne Änderungen, anschließender echter Dateitransfer und wiederholbare Medienprüfung ohne erneuten Datenimport.
+- Fehlende, veränderte, zusätzliche und verlinkte Dateien; Schutz bestehender Dateien durch `--ignore-existing`; bewusste Reparatur im Test und erneute erfolgreiche Prüfung.
+- `media_pending` bis zur Abnahme; erneute fehlgeschlagene Prüfung widerruft einen vorherigen Mediennachweis. Manipulierte Dateilisten, falsche Installation, verlorene Site-Zugehörigkeit und parallele Prüfungen werden abgewiesen.
+- Unterstützte Upload-Unterordnerfilter und gesperrte geänderte/gemeinsame Basisverzeichnisse. Private Transferdateien erhalten `0600`.
+- Pflicht zur passenden rrze-ac-Konfiguration und separaten administrativen HTTP-Bestätigung bei geschützten Dateien.
+
+Der lokale Transfer wurde mit dem vorhandenen macOS-openrsync (Protokoll 29, kompatibel zu rsync 2.6.9) ausgeführt. Remote-Befehle verwenden `--protect-args` und benötigen rsync ab 3.0 auf beiden Hosts; ein echter SSH-Transfer wurde nicht ausgeführt. Die Schutztests verwenden eine isolierte rrze-ac-Schnittstellen-Fixture. Reale Webserver-Regeln, HTTP-Zugriffsschutz, zusätzliche historische Medien-URL-Aliase und beliebige Plugin-Medienverweise bleiben Teil der Betriebsabnahme. WP-CLI-Kindprozesse sind weiterhin nicht in der Unit-Zeilenabdeckung enthalten.
+
 Arbeitspaket 2 stellt PHPUnit, synthetische Testdaten, einen vollständigen Export und Import sowie eine CI-Konfiguration bereit. Die Tests schaffen die Grundlage für die Sicherheitskorrekturen der folgenden Arbeitspakete. Sie bestätigen noch nicht sämtliche Anforderungen aus [Arbeitspaket 1](migration-scope.md).
 
 ## Installation und schnelle Tests

@@ -19,7 +19,7 @@ final class Destination
         }
     }
 
-    public static function inspect(array $address, int $uploadBytes, bool $skipUploads = false): array
+    public static function inspect(array $address, int $uploadBytes): array
     {
         global $wpdb;
         self::available($address);
@@ -36,10 +36,10 @@ final class Destination
             throw new RuntimeException('Cannot determine the next destination site ID.');
         }
         $id = (int) $status->Auto_increment;
-        $uploads = self::resources($id, $skipUploads);
+        $uploads = self::resources($id);
         return ['network_id' => get_current_network_id(), 'estimated_site_id' => $id,
             'prefix' => $wpdb->get_blog_prefix($id), 'uploads_directory' => $uploads,
-            'storage' => $skipUploads ? null : Files::capacity($uploads, $uploadBytes + 16777216)];
+            'storage' => Files::capacity($uploads, $uploadBytes + 16777216)];
     }
 
     public static function uploadPath(int $id): string
@@ -47,9 +47,14 @@ final class Destination
         $main = get_main_site_id();
         $custom = get_blog_option($main, 'upload_path');
         if (!defined('MULTISITE') || defined('UPLOADS') || defined('BLOGUPLOADDIR')
-            || get_site_option('ms_files_rewriting') || has_filter('upload_dir')
+            || get_site_option('ms_files_rewriting')
             || ($custom && $custom !== 'wp-content/uploads')) {
-            throw new UnsupportedUploadLayout('Custom upload paths, upload filters and legacy multisite uploads require a separately supported migration adapter. Use --skip-uploads only if media will be transferred and configured manually.');
+            throw new UnsupportedUploadLayout('Custom destination upload roots and legacy multisite uploads require a supported migration adapter. External transfer does not make a shared destination directory safe.');
+        }
+        $raw = _wp_upload_dir();
+        $effective = wp_upload_dir(null, false, true);
+        if (!empty($effective['error']) || ($effective['basedir'] ?? null) !== $raw['basedir']) {
+            throw new UnsupportedUploadLayout('The upload filter changes the destination media root. A dedicated site-owned destination adapter is required.');
         }
         return self::standardUploadPath($id);
     }
@@ -70,7 +75,7 @@ final class Destination
         return $path;
     }
 
-    public static function resources(int $id, bool $skipUploads = false): ?string
+    public static function resources(int $id): string
     {
         global $wpdb;
         $prefix = $wpdb->get_blog_prefix($id);
@@ -85,12 +90,10 @@ final class Destination
         if ($wpdb->last_error || $memberships !== null) {
             throw new RuntimeException('Pre-existing membership metadata for the new site ID blocks migration.');
         }
-        // Even manual transfers cannot bypass known leftovers or links in the standard location.
-        // A custom location is deliberately not resolved, created or written by this importer.
-        $uploads = $skipUploads ? self::standardUploadPath($id) : self::uploadPath($id);
+        $uploads = self::uploadPath($id);
         if (file_exists($uploads) || is_link($uploads)) {
             throw new RuntimeException('Pre-existing uploads for the new site ID block migration. Inspect the leftovers manually.');
         }
-        return $skipUploads ? null : $uploads;
+        return $uploads;
     }
 }
