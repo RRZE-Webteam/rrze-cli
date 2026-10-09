@@ -1948,6 +1948,47 @@ PHPHOOK);
         self::$sandbox->wp('target', ['rrze-migration', 'media', 'verify', $id]);
     }
 
+    public function testNextSiteIdUsesLiveMetadataAndRestoresTheSession(): void
+    {
+        $code = <<<'PHP'
+global $wpdb;
+$originalBlogs = $wpdb->blogs;
+$setting = $wpdb->get_row("SHOW SESSION VARIABLES LIKE 'information_schema_stats_expiry'");
+$table = $wpdb->base_prefix . 'site_id_cache_fixture';
+$created = false;
+try {
+    if ($setting !== null) {
+        $wpdb->query('SET SESSION information_schema_stats_expiry = 86400');
+    }
+    if ($wpdb->query("CREATE TABLE `$table` (blog_id bigint unsigned NOT NULL AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDB AUTO_INCREMENT=42") === false) {
+        throw new RuntimeException('Cannot create site-ID cache fixture.');
+    }
+    $created = true;
+    // Seed MySQL 8's statistics cache, then consume an ID without DDL.
+    $wpdb->get_row($wpdb->prepare('SHOW TABLE STATUS WHERE Name = %s', $table));
+    $wpdb->query("INSERT INTO `$table` VALUES (NULL)");
+    $wpdb->blogs = $table;
+    $estimated = \RRZE\CLI\Migration\Destination::nextSiteId();
+    $after = $wpdb->get_row("SHOW SESSION VARIABLES LIKE 'information_schema_stats_expiry'");
+    $wpdb->query("INSERT INTO `$table` VALUES (NULL)");
+    echo json_encode(['estimated' => $estimated, 'allocated' => (int) $wpdb->insert_id,
+        'expiry' => $after === null ? null : (int) $after->Value]);
+} finally {
+    $wpdb->blogs = $originalBlogs;
+    if ($created) {
+        $wpdb->query("DROP TABLE `$table`");
+    }
+    if ($setting !== null) {
+        $wpdb->query('SET SESSION information_schema_stats_expiry = ' . (int) $setting->Value);
+    }
+}
+PHP;
+        $result = json_decode(self::$sandbox->wp('target', ['eval', $code]), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(43, $result['estimated']);
+        self::assertSame($result['allocated'], $result['estimated']);
+        self::assertTrue($result['expiry'] === null || $result['expiry'] === 86400);
+    }
+
     private function transferMedia(string $id, bool $preview = true): void
     {
         $state = $this->runStatus($id);
@@ -2042,27 +2083,7 @@ PHPHOOK);
         $name = 'modified-' . bin2hex(random_bytes(5)) . '.zip';
         $path = self::$sandbox->root . '/runs-target/' . $name;
         self::assertTrue(copy($original, $path));
-        $zip = new ZipArchive();
-        self::assertTrue($zip->open($path));
-        try {
-            $modify($zip);
-            if ($refreshManifest) {
-                $meta = json_decode($zip->getFromName('site.json'), true);
-                if (is_array($meta)) {
-                    $meta['files'] = [];
-                    for ($index = 0; $index < $zip->numFiles; $index++) {
-                        $entry = $zip->getNameIndex($index);
-                        if ($entry !== false && $entry !== 'site.json' && !str_ends_with($entry, '/')) {
-                            $data = $zip->getFromName($entry);
-                            $meta['files'][$entry] = ['bytes' => strlen($data), 'sha256' => hash('sha256', $data)];
-                        }
-                    }
-                    $zip->addFromString('site.json', json_encode($meta, JSON_THROW_ON_ERROR));
-                }
-            }
-        } finally {
-            self::assertTrue($zip->close());
-        }
+        \RRZE\CLI\Tests\PackageFixture::modify($path, $modify, $refreshManifest);
         return $name;
     }
 

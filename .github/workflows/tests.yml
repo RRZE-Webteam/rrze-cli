@@ -35,8 +35,13 @@ jobs:
           extensions: mysqli, mbstring, dom, xml, xmlwriter, zip
           coverage: pcov
           tools: composer:v2, wp-cli:2.12.0
-      - name: Install MySQL clients
-        run: sudo apt-get update && sudo apt-get install -y default-mysql-client
+      - name: Install integration tools
+        run: sudo apt-get update && sudo apt-get install -y default-mysql-client rsync
+      - name: Report runtime versions
+        run: |
+          php -r 'printf("PHP %s / libzip %s\n", PHP_VERSION, ZipArchive::LIBZIP_VERSION);'
+          mysql --version
+          rsync --version
       - name: Install isolated test dependencies
         run: composer test:install
       - name: Unit tests and coverage

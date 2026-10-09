@@ -202,7 +202,7 @@ $result = match ($action) {
     })(),
     'leftover' => (function () use ($args) {
         global $wpdb;
-        $id = (int) $wpdb->get_var($wpdb->prepare('SELECT AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s', DB_NAME, $wpdb->blogs));
+        $id = \RRZE\CLI\Migration\Destination::nextSiteId();
         $prefix = $wpdb->get_blog_prefix($id);
         $kind = $args[1];
         $create = $args[2] === 'create';

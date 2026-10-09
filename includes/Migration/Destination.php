@@ -31,15 +31,39 @@ final class Destination
         if ($wpdb->last_error || Privileges::missing($grants, DB_NAME, strtoupper($revokes->Value ?? '') === 'ON')) {
             throw new RuntimeException('Cannot verify the required database permissions (explicit schema grants required).');
         }
-        $status = $wpdb->get_row($wpdb->prepare('SHOW TABLE STATUS WHERE Name = %s', $wpdb->blogs));
-        if ($wpdb->last_error || !$status || (int) $status->Auto_increment < 2) {
-            throw new RuntimeException('Cannot determine the next destination site ID.');
-        }
-        $id = (int) $status->Auto_increment;
+        $id = self::nextSiteId();
         $uploads = self::resources($id);
         return ['network_id' => get_current_network_id(), 'estimated_site_id' => $id,
             'prefix' => $wpdb->get_blog_prefix($id), 'uploads_directory' => $uploads,
             'storage' => Files::capacity($uploads, $uploadBytes + 16777216)];
+    }
+
+    /** An estimate, rechecked under the lock and against the ID WordPress allocates. */
+    public static function nextSiteId(): int
+    {
+        global $wpdb;
+        // MySQL 8 caches AUTO_INCREMENT in table statistics. A stale value can
+        // point at an existing site's tables even in a fresh WP-CLI process.
+        // Older MySQL/MariaDB versions without this variable need no override.
+        $setting = $wpdb->get_row("SHOW SESSION VARIABLES LIKE 'information_schema_stats_expiry'");
+        if ($wpdb->last_error || ($setting !== null && !ctype_digit((string) ($setting->Value ?? '')))) {
+            throw new RuntimeException('Cannot inspect the database metadata cache setting.');
+        }
+        $expiry = $setting === null ? 0 : (int) $setting->Value;
+        if ($expiry !== 0 && $wpdb->query('SET SESSION information_schema_stats_expiry = 0') === false) {
+            throw new RuntimeException('Cannot read uncached destination site IDs.');
+        }
+        try {
+            $status = $wpdb->get_row($wpdb->prepare('SHOW TABLE STATUS WHERE Name = %s', $wpdb->blogs));
+            if ($wpdb->last_error || !$status || (int) ($status->Auto_increment ?? 0) < 2) {
+                throw new RuntimeException('Cannot determine the next destination site ID.');
+            }
+            return (int) $status->Auto_increment;
+        } finally {
+            if ($expiry !== 0 && $wpdb->query('SET SESSION information_schema_stats_expiry = ' . $expiry) === false) {
+                throw new RuntimeException('Cannot restore the database metadata cache setting.');
+            }
+        }
     }
 
     public static function uploadPath(int $id): string
