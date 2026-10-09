@@ -168,7 +168,8 @@ final class Wizard extends Command
             (new Import())->all([$file], $options + ['dry-run' => true]);
             return;
         }
-        (new Import(static function (array $plan) use ($terminal): bool {
+        $mediaHost = $mediaSource = null;
+        (new Import(static function (array $plan) use ($terminal, &$mediaHost, &$mediaSource): bool {
             $terminal->line('Import plan');
             Console::get()->plan($plan);
             $terminal->line('Existing global users remain unchanged; missing WordPress accounts receive random local passwords. This does not create SSO identities.');
@@ -176,7 +177,18 @@ final class Wizard extends Command
             if (($plan['uploads']['excluded_directories'] ?? []) && !$terminal->confirm('Listed upload directories were excluded from transfer and verification. Continue')) {
                 return false;
             }
+            $terminal->line('Prepare the commands for the later media transfer. The wizard does not execute rsync.');
+            $transport = $terminal->rich
+                ? $terminal->select('Media source location', ['local' => 'Local / mounted directory', 'ssh' => 'Remote via SSH'], 'local')
+                : $terminal->choice('Media source location', ['local', 'ssh'], 'local');
+            $mediaHost = $transport === 'ssh'
+                ? $terminal->ask('SSH source (user@hostname or SSH alias)', '', static fn ($value) => MediaTransfer::host($value)) : null;
+            $terminal->line('Use the frozen media directory matching this export; retain it before deleting the source website.');
+            $mediaSource = $terminal->ask($transport === 'ssh' ? 'Media snapshot directory on the source host' : 'Local / mounted media snapshot directory',
+                $plan['uploads']['source_directory'], static fn ($value) => MediaManifest::absolute($value));
             return $terminal->identity('New destination', $plan['destination']) && $terminal->confirm('Create the new website and execute this plan now');
+        }, static function (array $manifest, array $layout, string $directory, string $id) use (&$mediaHost, &$mediaSource): void {
+            Media::instructions($manifest, $layout, $directory, $id, $mediaHost, $mediaSource);
         }))->all([$file], $options);
     }
 

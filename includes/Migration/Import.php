@@ -12,7 +12,7 @@ use WP_CLI;
 class Import extends Command
 {
     /** The wizard supplies a reviewer; direct CLI calls retain their noninteractive behavior. */
-    public function __construct(private readonly ?\Closure $review = null)
+    public function __construct(private readonly ?\Closure $review = null, private readonly ?\Closure $mediaInstructions = null)
     {
     }
 
@@ -198,7 +198,7 @@ class Import extends Command
             }
         } else {
             WP_CLI::success('Site data imported at ' . $address['url'] . ' Media transfer and verification are pending.');
-            Media::instructions($plan['media'], $layout, $run->directory, $run->id);
+            ($this->mediaInstructions ?? Media::instructions(...))($plan['media'], $layout, $run->directory, $run->id);
         }
     }
 

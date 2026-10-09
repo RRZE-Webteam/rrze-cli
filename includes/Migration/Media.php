@@ -22,10 +22,13 @@ final class Media extends Command
      * : SSH source as user@hostname. Use an SSH alias for ports or other settings.
      * [--source-dir=<directory>]
      * : Matching media snapshot directory. Without --source-host, explicitly selects a local or mounted snapshot.
+     * [--plain]
+     * : Show the transfer summary and commands without colors or boxes.
      */
     public function plan($args, $assoc_args): void
     {
         try {
+            Console::configure(isset($assoc_args['plain']));
             $root = PackageStorage::root($assoc_args);
             [$state, $manifest, $layout] = self::load($root, $args[0]);
             self::instructions($manifest, $layout, $root . '/' . $args[0], $args[0], $assoc_args['source-host'] ?? null, $assoc_args['source-dir'] ?? null);
@@ -131,24 +134,37 @@ final class Media extends Command
 
     public static function instructions(array $manifest, array $layout, string $directory, string $id, ?string $host = null, ?string $source = null): void
     {
-        $commands = MediaTransfer::commands($manifest, $layout, $directory . '/media-files.txt', $host, $source);
-        foreach (['External media transfer — run on the destination host (remote transfer requires rsync 3.0+ on both hosts).',
-            'Source media directory: ' . ($source ?? $manifest['source_directory']),
-            'Destination media directory: ' . $layout['directory'],
-            'Media URL: ' . $manifest['source_baseurl'] . '/ -> ' . $layout['baseurl'] . '/',
-            'Use a frozen snapshot matching the export. Only inventoried files are selected; existing files are not overwritten or deleted.',
-            'Excluded directories: ' . (implode(', ', $manifest['excluded_directories']) ?: 'none')] as $line) {
-            WP_CLI::log(Terminal::safe($line));
+        $console = Console::get();
+        $commands = MediaTransfer::commands($manifest, $layout, $directory . '/media-files.txt', $host, $source, true);
+        $remote = $host !== null || $source === null;
+        $console->summary('Media transfer', [
+            'Source URL' => $manifest['source_baseurl'],
+            'Destination URL' => $layout['baseurl'],
+            'Transfer' => $remote ? 'Remote via SSH (' . ($host ?? 'source host required') . ')' : 'Local / mounted directory',
+            'Files' => count($manifest['files']) . ' (' . number_format(array_sum(array_column($manifest['files'], 'bytes')) / 1048576, 1) . ' MiB)',
+            'Excluded directories' => implode(', ', $manifest['excluded_directories']) ?: 'none',
+        ]);
+        $console->line('Source media directory: ' . ($source ?? $manifest['source_directory']));
+        $console->line('Destination media directory: ' . $layout['directory']);
+        $console->line('Run these commands on the destination host. Use a frozen snapshot matching the export.');
+        $console->line('Only inventoried files are selected; existing files are not overwritten or deleted.');
+        if ($remote) {
+            $console->line('Remote transfer requires rsync 3.0+ on both hosts (--protect-args).');
         }
         if (MediaTransfer::requiresAccessCheck($manifest)) {
             WP_CLI::warning('Before transferring protected media, configure rrze-ac and web-server access rules. Test unauthorized and authorized HTTP access before confirming --access-checked.');
         }
         if ($host === null && $source === null) {
-            WP_CLI::log('Replace SOURCE_USER@SOURCE_HOST, or regenerate with media plan --source-host=user@hostname (use --source-dir for a snapshot path).');
+            $console->line('Replace SOURCE_USER@SOURCE_HOST for SSH. For a local transfer, regenerate the commands with:');
+            $console->line();
+            foreach (explode("\n", Console::shell(['wp', 'rrze-migration', 'media', 'plan', $id, '--run-dir=' . dirname($directory), '--source-dir=' . $manifest['source_directory']])) as $line) {
+                $console->line($line);
+            }
         }
-        WP_CLI::log('Preview: ' . $commands['preview']);
-        WP_CLI::log('Transfer: ' . $commands['transfer']);
-        WP_CLI::log('Then: wp rrze-migration media verify ' . $id . ' --run-dir=' . escapeshellarg(dirname($directory)));
+        $console->command('1. Preview', 'Shows the planned copies without transferring files.', $commands['preview']);
+        $console->command('2. Transfer', 'Run after reviewing the preview. Copies missing files only.', $commands['transfer']);
+        $console->command('3. Verify', 'Run after the transfer. Checks completeness, checksums and WordPress media references.',
+            Console::shell(['wp', 'rrze-migration', 'media', 'verify', $id, '--run-dir=' . dirname($directory)]));
     }
 
 }

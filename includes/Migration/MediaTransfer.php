@@ -101,10 +101,18 @@ final class MediaTransfer
         return $rules;
     }
 
-    public static function commands(array $manifest, array $layout, string $list, ?string $host = null, ?string $sourceDirectory = null): array
+    public static function host(string $host): string
     {
-        if ($host !== null && !preg_match('/^(?:[A-Za-z0-9_][A-Za-z0-9_.-]*@)?[A-Za-z0-9][A-Za-z0-9.-]*$/D', $host)) {
+        if (!preg_match('/^(?:[A-Za-z0-9_][A-Za-z0-9_.-]*@)?[A-Za-z0-9][A-Za-z0-9.-]*$/D', $host)) {
             throw new RuntimeException('Use --source-host=user@hostname without a port, path or SSH options. Configure SSH aliases for those settings.');
+        }
+        return $host;
+    }
+
+    public static function commands(array $manifest, array $layout, string $list, ?string $host = null, ?string $sourceDirectory = null, bool $multiline = false): array
+    {
+        if ($host !== null) {
+            self::host($host);
         }
         $source = MediaManifest::absolute($sourceDirectory ?? $manifest['source_directory']) . '/';
         // Without an explicit local snapshot, require the operator to supply the source host.
@@ -115,8 +123,8 @@ final class MediaTransfer
         }
         $tail = ['--', $source, $layout['directory'] . '/'];
         return [
-            'preview' => implode(' ', array_map('escapeshellarg', [...$arguments, '--dry-run', ...$tail])),
-            'transfer' => implode(' ', array_map('escapeshellarg', [...$arguments, ...$tail])),
+            'preview' => Console::shell([...$arguments, '--dry-run', ...$tail], $multiline),
+            'transfer' => Console::shell([...$arguments, ...$tail], $multiline),
         ];
     }
 

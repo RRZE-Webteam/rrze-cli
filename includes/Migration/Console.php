@@ -40,6 +40,77 @@ final class Console
         $this->line();
     }
 
+    /** Render informational text only; shell commands stay outside the box. */
+    public function summary(string $title, array $values): void
+    {
+        if ($this->quiet) {
+            return;
+        }
+        $lines = [];
+        foreach ($values as $label => $value) {
+            $lines[] = Terminal::safe($label . ': ' . $value);
+        }
+        if (!$this->rich) {
+            $this->heading($title);
+            foreach ($lines as $line) {
+                $this->line($line);
+            }
+            return;
+        }
+        $box = new \Laravel\Prompts\Callout(Terminal::safe($title), implode(PHP_EOL, $lines));
+        $box->state = 'submit';
+        // Render into this console's stream without resetting an active wizard's
+        // shared prompt state. Metadata stays literal, even if it contains markup.
+        $renderer = new class($box) extends \Laravel\Prompts\Themes\Default\CalloutRenderer {
+            protected function autoFormat(string $text): string
+            {
+                $this->minWidth = max(1, min(80, \Laravel\Prompts\Prompt::terminal()->cols() - 6));
+                return $text;
+            }
+
+            protected function ansiWordwrap(string $text, int $width): array
+            {
+                return explode(PHP_EOL, $this->mbWordwrap($text, $width, PHP_EOL, true));
+            }
+        };
+        fwrite($this->output, (string) $renderer($box));
+    }
+
+    /** Quote each complete argument; continuations only occur between arguments. */
+    public static function shell(array $arguments, bool $multiline = true): string
+    {
+        foreach ($arguments as $argument) {
+            if (!is_string($argument) || !preg_match('//u', $argument) || preg_match('/\p{C}/u', $argument)) {
+                throw new \RuntimeException('Cannot display a shell command containing invalid text or control characters.');
+            }
+        }
+        $quoted = array_map('escapeshellarg', $arguments);
+        if (!$multiline) {
+            return implode(' ', $quoted);
+        }
+        $lines = [];
+        $line = '';
+        foreach ($quoted as $argument) {
+            if ($line !== '' && mb_strwidth($line . ' ' . $argument) > 76) {
+                $lines[] = $line;
+                $line = '';
+            }
+            $line .= ($line === '' ? '' : ' ') . $argument;
+        }
+        $lines[] = $line;
+        return implode(" \\\n  ", $lines);
+    }
+
+    public function command(string $title, string $description, string $command): void
+    {
+        $this->heading($title);
+        $this->line($description);
+        $this->line();
+        foreach (explode("\n", $command) as $line) {
+            $this->line($line);
+        }
+    }
+
     public function status(string $marker, string $message, string $color = '36'): void
     {
         if ($this->quiet) {

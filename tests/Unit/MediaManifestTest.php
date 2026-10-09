@@ -111,6 +111,9 @@ final class MediaManifestTest extends TestCase
         }
         $local = MediaTransfer::commands($manifest, $layout, '/private/list', null, '/snapshot');
         self::assertStringContainsString("'/snapshot/'", $local['transfer']);
+        self::assertStringNotContainsString('--protect-args', $local['transfer']);
+        $multiline = MediaTransfer::commands($manifest, $layout, '/private/list', null, '/snapshot', true);
+        self::assertSame($local, array_map(static fn ($command) => str_replace(" \\\n  ", ' ', $command), $multiline));
         $this->expectExceptionMessage('user@hostname');
         MediaTransfer::commands($manifest, $layout, '/private/list', '-e injected');
     }

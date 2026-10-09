@@ -30,6 +30,10 @@ Nach erfolgreichem Datenimport lautet der Status `media_pending`. Das private La
 
 ## 3. Transfer auf dem Zielserver vorbereiten
 
+Im Import-Wizard wird die Medienquelle bereits vor der letzten Bestätigung ausgewählt: lokales/eingebundenes Verzeichnis oder SSH-Quelle. Nach erfolgreichem Datenimport erscheinen die dazu passenden Befehle. Lokale Aufrufe enthalten kein `--protect-args` und funktionieren auch mit dem macOS-openrsync. Die CLI führt den Transfer weiterhin nicht selbst aus.
+
+Zum erneuten Anzeigen oder Ändern der Transferquelle:
+
 ```sh
 wp rrze-migration media plan RUN_ID \
   --run-dir=/srv/private/rrze-migrations \
@@ -46,6 +50,8 @@ wp rrze-migration media plan RUN_ID --source-dir=/mnt/snapshot/website-media
 ```
 
 Die ausgegebenen Befehle auf dem **Zielserver** ausführen: zuerst `Preview`, dann nach Prüfung `Transfer`. Die abschließenden Schrägstriche bedeuten, dass die Inhalte ins Zielverzeichnis kopiert werden. Die private Dateiliste beschränkt die Übertragung auf den exportierten Umfang. Es gibt kein `--delete`, keine Übernahme von Eigentümern/Gruppen und kein Kopieren von Symlinks. `--ignore-existing` schützt vorhandene Zieldateien vor Überschreiben. Eigentümer und Leserechte für den Ziel-Webserver verantwortet die Administration.
+
+Die Ausgabe gliedert sich in Übersicht und drei nummerierte Schritte: Vorschau, Übertragung und Prüfung. Kopierbare Befehle stehen außerhalb der farbigen Übersicht und werden nur zwischen vollständigen Argumenten mit `\` umgebrochen. Alle Zeilen des gewünschten Befehls zusammen kopieren. `media plan --plain` bzw. `--no-color` schaltet Farben und Infobox ab; bei umgeleiteter Ausgabe erfolgt das automatisch. Die Quellangaben des Wizards werden nicht dauerhaft gespeichert; `media plan` benötigt sie erneut, um denselben lokalen oder SSH-Aufruf zu erzeugen.
 
 Die CLI startet keine SSH-Verbindung, speichert keine Zugangsdaten und führt rsync nicht aus. Die Quelldateien müssen aus dem unveränderten Snapshot stammen. Nachträgliche Änderungen werden durch die abschließende Prüfung erkannt, nicht automatisch korrigiert.
 

@@ -2,7 +2,13 @@
 
 Der aktuelle Medienablauf verwendet seit 9. Oktober 2026 ausschließlich externen rsync-Transfer mit separater Verifikation; siehe [Medientransfer](migration-media.md). Die datierten Abschnitte unten dokumentieren frühere Entwicklungsstände, darunter inzwischen entfernte Upload-Optionen. Sie sind keine aktuelle Bedienungsanleitung.
 
-## Aktueller Teststand: externer Medientransfer
+## Aktueller Teststand: Medienausgabe und Quellauswahl
+
+Am 9. Oktober 2026 erfolgreich: 250 Unit-Tests mit 481 Assertions unter PHP 8.5.11. Die zusätzlichen Prüfungen führen einen angezeigten mehrzeiligen Befehl tatsächlich in der Shell aus und kontrollieren unveränderte Argumente mit Leerzeichen, Anführungszeichen, Unicode und Shell-Sonderzeichen. Steuerzeichen werden vor der Befehlsausgabe abgelehnt.
+
+Zehn betroffene Integrationsfälle unter MAMP/PHP 8.3.30 wurden geprüft: neun bestanden im gemeinsamen Lauf, der rsync-Fall nach Anpassung einer alten Ausgabe-Erwartung im gezielten Nachlauf mit 38 Assertions. Abgedeckt sind lokale und SSH-Quellauswahl, ungültige Eingaben und Abbruch vor Site-Anlage, unveränderte Importbestätigungen, reine Vorschau, Ausschlussbestätigung, farbiges Terminal und `media plan --plain`. Die tatsächlich ausgegebenen lokalen Mehrzeiler wurden für Dry-Run und Transfer ausgeführt und mit `media verify` geprüft; bestehende Dateien bleiben auch bei Wiederholung unverändert. SSH-Befehle wurden auf Ausgabe und Quoting geprüft, ohne eine SSH-Verbindung auszuführen. Die Tests verwenden ausschließlich temporäre WordPress-Kopien und eigene Testdatenbanken. Ein vollständiger Integrationslauf wurde für diese Ausgabeänderung nicht wiederholt.
+
+## Vorheriger Teststand: externer Medientransfer
 
 Am 9. Oktober 2026 erfolgreich: 248 Unit-Tests mit 475 Assertions unter PHP 8.5.11. PHP-Syntaxprüfung von 45 betroffenen bzw. angrenzenden Dateien, lokale Dokumentationslinks und `git diff --check` sind fehlerfrei.
 
