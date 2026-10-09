@@ -197,16 +197,18 @@ final class Wizard extends Command
         if ($terminal->rich && $listing['files']) {
             $optionsList = ['manual' => 'Enter a private ZIP path'];
             foreach ($listing['files'] as $index => $file) {
-                $optionsList['zip-' . $index] = '#' . ($index + 1) . ' ' . $file['path'] . ' | '
-                    . gmdate('Y-m-d H:i', $file['modified']) . ' UTC | ' . number_format($file['bytes'] / 1048576, 1) . ' MiB';
+                $optionsList['zip-' . $index] = '#' . ($index + 1) . ' ' . $this->packageLabel($file);
             }
             if ($listing['incomplete']) {
                 $terminal->line('Package list is limited; an unlisted ZIP can be entered by path.');
             }
+            $terminal->line('Dates show file modification in UTC. Import copies are retained packages from earlier runs.');
             $selected = $terminal->select('Import package (newest first)', $optionsList, 'manual');
             if ($selected !== 'manual') {
-                $path = PackageStorage::input($listing['files'][(int) substr($selected, 4)]['path'], $options);
+                $file = $listing['files'][(int) substr($selected, 4)];
+                $path = PackageStorage::input($file['path'], $options);
                 $terminal->line('Selected package: ' . $path);
+                $terminal->line(sprintf('Modified: %s UTC | Size: %.1f MiB', gmdate('Y-m-d H:i:s', $file['modified']), $file['bytes'] / 1048576));
                 return $path;
             }
         }
@@ -238,6 +240,24 @@ final class Wizard extends Command
         });
         $terminal->line('Selected ZIP: ' . $selected);
         return $selected;
+    }
+
+    /** Display hints from storage names only; package validation still follows selection. */
+    private function packageLabel(array $file): string
+    {
+        $name = basename($file['path']);
+        $directory = basename(dirname($file['path']));
+        $context = '';
+        if (preg_match('/^export-\d{8}-\d{6}-site-([1-9][0-9]*)-[a-f0-9]{16}$/D', $directory, $match)) {
+            $context = 'Export · site ' . $match[1];
+        } elseif (preg_match('/^[a-f0-9]{32}$/D', $directory) && $name === 'package.zip') {
+            $name = 'Import copy ' . substr($directory, 0, 8);
+        } elseif ($directory !== '.') {
+            $context = mb_strimwidth(Terminal::safe($directory), 0, 20, '…');
+        }
+        // Leave room for the date and origin in ordinary terminal widths.
+        $name = mb_strimwidth(Terminal::safe($name), 0, 28, '…');
+        return $name . ' | ' . gmdate('Y-m-d H:i', $file['modified']) . ($context === '' ? '' : ' | ' . $context);
     }
 
     private function storage(Terminal $terminal): string
